@@ -1,0 +1,924 @@
+<!doctype html>
+<!-- ===========================================================================
+  Notebuilt Pro — crew link self-check (TEMPORARY test harness for gate 3)
+  Copyright (c) 2026 Enlightened Global Solutions. All rights reserved.
+
+  NOT an EGS app. It exists to answer, on real phones: does a crew link arrive
+  whole and tappable, and does the tap land in the same browser storage it was
+  generated in? The real Pro build overwrites this file.
+  Deliberately absent: service worker (a cached page would corrupt the test),
+  support / privacy / share / beginner mode.
+  Kept: cold-open version stamp, safe-area insets, clean at 320px, dark + light.
+  The real Pro build must DROP localStorage key notebuiltpro.selfcheck.marker.
+  Spec: docs/specs/notebuilt-pro-phase1-spec.md §5, §9 gate 3.
+============================================================================ -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="dark light">
+<title>Crew link self-check</title>
+<!-- No icon file: an empty data: icon stops the browser asking the server for favicon.ico. -->
+<link rel="icon" href="data:,">
+<script>window.EGS_VERSION = '2026.10.03-1034';</script>
+<style>
+  :root{
+    --ink:#15181D; --card:#1D2128; --line:#333A45; --line-strong:#67758B;
+    --paper:#ECE6D8; --paper-dim:#A7A294;
+    --brass:#D7A94B; --on-brass:#231A07;
+    --good:#7FCB8F; --bad:#F0907F; --warn:#E5C06A;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --ink:#F6F3EC; --card:#FFFFFF; --line:#D9D3C4; --line-strong:#8A8474;
+      --paper:#1B1D21; --paper-dim:#5A574E;
+      --brass:#7A5A12; --on-brass:#FFFFFF;
+      --good:#1E6B32; --bad:#A3301F; --warn:#6E5200;
+    }
+  }
+  *{ box-sizing:border-box; }
+  html{ -webkit-text-size-adjust:100%; }
+  body{
+    margin:0; background:var(--ink); color:var(--paper);
+    font:16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding:calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
+            calc(24px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+  }
+  main{ max-width:640px; margin:0 auto; }
+  h1{ font-size:22px; line-height:1.2; margin:0 0 4px; }
+  h2{ font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:var(--paper-dim); margin:0 0 10px; font-weight:600; }
+  h3{ font-size:16px; margin:0 0 10px; }
+  p{ margin:0 0 10px; }
+  .dim{ color:var(--paper-dim); font-size:14px; }
+  .ver-stamp{ color:var(--paper-dim); font-size:13px; font-variant-numeric:tabular-nums; margin:0 0 16px; overflow-wrap:anywhere; }
+  section{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin:0 0 14px; }
+  .verdict{ font-size:20px; font-weight:700; line-height:1.25; margin:0 0 8px; overflow-wrap:anywhere; }
+  .good{ color:var(--good); } .bad{ color:var(--bad); } .warn{ color:var(--warn); }
+  .mono{ font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:13px; overflow-wrap:anywhere; }
+  .row{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  button, a.btn{
+    font:inherit; font-weight:600; min-height:44px; padding:8px 14px; border-radius:10px;
+    border:1px solid var(--line-strong); background:transparent; color:var(--paper);
+    cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; touch-action:manipulation;
+  }
+  button.primary{ background:var(--brass); border-color:var(--brass); color:var(--on-brass); }
+  button[aria-pressed="true"]{ border-color:var(--brass); color:var(--brass); }
+  button:focus-visible, a.btn:focus-visible, textarea:focus-visible{ outline:2px solid var(--brass); outline-offset:2px; }
+  .gen{ border-top:1px solid var(--line); padding-top:14px; margin-top:14px; }
+  textarea{
+    display:block; width:100%; height:112px; margin:10px 0 8px; padding:8px; resize:vertical;
+    background:var(--ink); color:var(--paper); border:1px solid var(--line); border-radius:8px;
+    font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; line-height:1.35; word-break:break-all;
+  }
+  .count{ font-weight:700; font-variant-numeric:tabular-nums; }
+  [hidden]{ display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Crew link self-check</h1>
+  <!-- EGS-STD:coldopen-version — first screen, no setup in front of it. -->
+  <div class="ver-stamp" id="ver"></div>
+
+  <section id="arrival" hidden aria-live="polite">
+    <h2>This link</h2>
+    <p class="verdict" id="verdict">Checking…</p>
+    <p class="dim" id="verdict-detail"></p>
+  </section>
+
+  <section>
+    <h2>Storage</h2>
+    <p id="store-status"></p>
+    <p class="dim mono" id="store-marker"></p>
+    <div class="row" id="clear-ask">
+      <button type="button" id="clear-btn">Clear marker</button>
+    </div>
+    <div id="clear-confirm" hidden>
+      <p>Clear this browser’s marker? Its next visit will read as new storage.</p>
+      <div class="row">
+        <button type="button" class="primary" id="clear-yes">Yes, clear it</button>
+        <button type="button" id="clear-no">Keep it</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Generate a test link</h2>
+    <p class="dim">Generate, copy, send it through the chat app, then tap it where it arrives.</p>
+    <div class="row" role="group" aria-label="Task text">
+      <button type="button" id="text-real" aria-pressed="true">Realistic text</button>
+      <button type="button" id="text-worst" aria-pressed="false">Worst-case text</button>
+    </div>
+    <div id="gens"></div>
+  </section>
+
+  <section>
+    <h2>This browser</h2>
+    <p class="dim mono" id="ua"></p>
+  </section>
+</main>
+
+<script>
+/* EGS-SHARED:crew-task BEGIN */
+// ============================================================================
+//  EGS platform — crew-task format (shared component)
+//  Copyright (c) 2026 Enlightened Global Solutions. All rights reserved.
+//
+//  ONE source for everything a crew list or report IS: ids, the logical
+//  shapes, the compact wire encoding, the codec, the validator and the merge.
+//  Notebuilt (worker side) and Notebuilt Pro (boss side) each carry a
+//  BYTE-IDENTICAL copy of this block, between the BEGIN/END marker lines,
+//  inside their index.html. Edit it here, never in an app — PaidUp's
+//  independently rewritten sw_logic is what a drifted copy turns into.
+//  Spec: docs/specs/notebuilt-pro-phase1-spec.md §4–§6.
+//
+//  Logical shapes (what the apps store and render):
+//    LIST   { f, v, k:'list', listId, issuedAt, boss:{id,name}, job:{id,name},
+//             day:'YYYY-MM-DD', mode:'private'|'crew', workers:[{id,name}],
+//             tasks:[{id, worker:<worker id>, text, order, editedAt,
+//                     gone:null|'cancelled'|'reassigned'}] }
+//    REPORT { f, v, k:'report', listId, workerId, sentAt,
+//             tasks:[{id, status:'open'|'done'|'waiting', note, changedAt}] }
+//  A task's `worker` is the worker's ID in logical form; only the wire refers
+//  to workers by index, because indices are per-payload and mean nothing once
+//  two payloads are merged.
+//
+//  Wire (positional arrays, then UTF-8 → deflate-raw → base64url, with the
+//  codec character '1' in front so a future codec can be told apart):
+//    LIST   [1,'l',listId,issuedAt,[bossId,bossName],[jobId,jobName],day,
+//            mode(0 private|1 crew),[[workerId,name]...],
+//            [[taskId,workerIdx,text,order,editedAt,gone(0|1 cancelled|2 reassigned)]...]]
+//    REPORT [1,'r',listId,workerId,sentAt,[[taskId,status(0 open|1 done|2 waiting),note,changedAt]...]]
+//
+//  Everything that decodes a payload returns {ok:true,value} or
+//  {ok:false,code,reason} and never throws. Every merge is PURE: inputs are
+//  never mutated, so a refusal leaves the caller's state byte-identical.
+// ============================================================================
+(function(global){
+  'use strict';
+
+  var FORMAT = 'egs-crew', VERSION = 1, CODEC = '1';
+
+  // §4 starting limits. Text lengths count characters (code points), not bytes.
+  var LIMITS = { name:40, text:200, note:280, tasks:300, workers:30,
+                 bytes:262144,      // decompressed JSON — the zip-bomb ceiling
+                 encoded:360000 };  // payload string — refused before any decoding
+
+  var LINK = {
+    list:   'https://notebuilt.ca/#crew=',
+    report: 'https://pro.notebuilt.ca/#report='   // URL pending (spec §13)
+  };
+
+  // Permanent ids: 128 random bits as base64url = 22 chars, and the last char
+  // carries only 4 bits, so it can only be A, Q, g or w. Holding ids to that
+  // canonical form means one id has exactly one spelling.
+  var ID_RE = /^[A-Za-z0-9_-]{21}[AQgw]$/;
+  // Task ids: list-scoped base36 counters, no leading zero, ≤4 chars.
+  var TASK_ID_RE = /^[1-9a-z][0-9a-z]{0,3}$/;
+  var PAYLOAD_RE = /^1[A-Za-z0-9_-]+$/;
+  var DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+  // Timestamps are epoch seconds from the writer's clock. 0 only where a
+  // field may never have been touched (an untouched task's changedAt).
+  var T_MIN = 1500000000, T_MAX = 4102444800;
+
+  var STATUS = ['open', 'done', 'waiting'];
+  var GONE = [null, 'cancelled', 'reassigned'];
+  var MODE = ['private', 'crew'];
+
+  // Control characters, lone surrogates, and bidi overrides/isolates (which
+  // can make a name render as someone else's). Newline is allowed in notes only.
+  var BAD_LINE = /[\u0000-\u001f\u007f‪-‮⁦-⁩]|[\ud800-\udbff](?![\udc00-\udfff])|(?:^|[^\ud800-\udbff])[\udc00-\udfff]/;
+  // Markup in text is refused outright, on top of esc() at render: a payload
+  // carrying a tag is not a crew list anyone typed. A bare '<' ("cut < 8ft") is fine.
+  var TAG = /<[A-Za-z\/!?]/;
+  var BAD_NOTE = /[\u0000-\u0009\u000b-\u001f\u007f‪-‮⁦-⁩]|[\ud800-\udbff](?![\udc00-\udfff])|(?:^|[^\ud800-\udbff])[\udc00-\udfff]/;
+
+  // Plain-English reasons, shown to people as-is.
+  var REASONS = {
+    damaged:        'This link is damaged or incomplete. Ask for it to be sent again.',
+    too_big:        'This is bigger than a crew list or report can be, so I didn’t open it.',
+    newer:          'This was made by a newer version of the app. Update the app, then try again.',
+    wrong_kind:     'This isn’t the kind of crew link this app opens.',
+    invalid:        'Something in this doesn’t check out, so I didn’t import any of it.',
+    list_mismatch:  'This update doesn’t match the list you already have, so I left your list alone.',
+    unknown_list:   'I don’t have the list this report is for. If you’ve reset or moved phones, restoring a backup should bring it back.',
+    unknown_worker: 'This report is from someone who isn’t on that list.',
+    unknown_task:   'This report mentions a task that isn’t on that list, so I didn’t use any of it.',
+    not_theirs:     'This report touches a task that was never this person’s, so I didn’t use any of it.'
+  };
+
+  function CrewError(code, detail){ this.code = code; this.detail = detail || ''; }
+  function fail(code, detail){ throw new CrewError(code, detail); }
+  function need(cond, detail){ if(!cond) fail('invalid', detail); }
+  function refusal(e){
+    if(e instanceof CrewError) return { ok:false, code:e.code, reason:REASONS[e.code], detail:e.detail };
+    return { ok:false, code:'damaged', reason:REASONS.damaged, detail:String(e && e.message || e) };
+  }
+  function clone(x){ return JSON.parse(JSON.stringify(x)); }
+  function has(o, k){ return Object.prototype.hasOwnProperty.call(o, k); }
+
+  // ---- ids ------------------------------------------------------------------
+
+  var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+  function b64e(bytes){
+    var out = '', i = 0, n = bytes.length;
+    for(; i + 2 < n; i += 3){
+      var v = (bytes[i] << 16) | (bytes[i+1] << 8) | bytes[i+2];
+      out += B64[v >> 18] + B64[(v >> 12) & 63] + B64[(v >> 6) & 63] + B64[v & 63];
+    }
+    if(n - i === 1){ var a = bytes[i] << 16; out += B64[a >> 18] + B64[(a >> 12) & 63]; }
+    else if(n - i === 2){ var b = (bytes[i] << 16) | (bytes[i+1] << 8); out += B64[b >> 18] + B64[(b >> 12) & 63] + B64[(b >> 6) & 63]; }
+    return out;
+  }
+
+  // Strict: unknown characters, an impossible length, or stray trailing bits
+  // all refuse, so every byte string has exactly one accepted spelling.
+  function b64d(s){
+    if(s.length % 4 === 1) fail('damaged', 'base64 length');
+    var map = {}, i;
+    for(i = 0; i < 64; i++) map[B64[i]] = i;
+    var out = new Uint8Array(Math.floor(s.length * 3 / 4)), o = 0, buf = 0, bits = 0;
+    for(i = 0; i < s.length; i++){
+      var c = map[s[i]];
+      if(c === undefined) fail('damaged', 'base64 char');
+      buf = (buf << 6) | c; bits += 6;
+      if(bits >= 8){ bits -= 8; out[o++] = (buf >> bits) & 255; }
+    }
+    if(buf & ((1 << bits) - 1)) fail('damaged', 'base64 trailing bits');
+    return out;
+  }
+
+  function newId(){
+    var b = new Uint8Array(16);
+    global.crypto.getRandomValues(b);
+    return b64e(b);
+  }
+
+  // Next unused task id in this list. Tombstones keep their ids, so an id is
+  // never reused within a list.
+  function nextTaskId(list){
+    var max = 0;
+    (list && list.tasks || []).forEach(function(t){ var n = parseInt(t.id, 36); if(n > max) max = n; });
+    return (max + 1).toString(36);
+  }
+
+  // A writer's next timestamp for a field it already wrote: never equal to or
+  // behind the last one, because a tie keeps what's there and the edit would
+  // silently not travel. Guards a phone clock that stepped backwards.
+  function stamp(prev, now){
+    var t = Math.floor(now);
+    return (typeof prev === 'number' && prev >= t) ? prev + 1 : t;
+  }
+
+  // ---- field checks -----------------------------------------------------------
+
+  function chars(s){ return Array.from(s).length; }
+
+  function str(s, max, what, opts){
+    opts = opts || {};
+    need(typeof s === 'string', what + ' not a string');
+    need((opts.multiline ? BAD_NOTE : BAD_LINE).test(s) === false, what + ' has forbidden characters');
+    need(TAG.test(s) === false, what + ' has markup');
+    need(chars(s) <= max, what + ' too long');
+    if(!opts.optional) need(s.trim().length > 0, what + ' empty');
+    return s;
+  }
+  function time(t, what, allowZero){
+    need(typeof t === 'number' && Number.isInteger(t) && ((allowZero && t === 0) || (t >= T_MIN && t <= T_MAX)), what + ' bad time');
+    return t;
+  }
+  function id(s, what){ need(typeof s === 'string' && ID_RE.test(s), what + ' bad id'); return s; }
+  function taskId(s){ need(typeof s === 'string' && TASK_ID_RE.test(s), 'bad task id'); return s; }
+  function day(s){
+    var m = typeof s === 'string' && DAY_RE.exec(s);
+    need(m, 'bad day');
+    var y = +m[1], mo = +m[2], d = +m[3], dt = new Date(Date.UTC(y, mo - 1, d));
+    need(y >= 2020 && dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d, 'impossible day');
+    return s;
+  }
+  function int(n, lo, hi, what){ need(typeof n === 'number' && Number.isInteger(n) && n >= lo && n <= hi, what + ' out of range'); return n; }
+  function arr(a, len, what){ need(Array.isArray(a) && (len == null || a.length === len), what + ' bad shape'); return a; }
+  function unique(list, what){
+    var seen = {};
+    list.forEach(function(x){ need(!has(seen, x), 'duplicate ' + what); seen[x] = 1; });
+  }
+
+  // ---- wire ⇄ logical. fromWire IS the validator: it builds a fresh object
+  //      from known positions only, so nothing unrecognised can ride through. --
+
+  function listFromWire(a){
+    arr(a, 10, 'list');
+    var boss = arr(a[4], 2, 'boss'), job = arr(a[5], 2, 'job');
+    var ws = arr(a[8], null, 'workers'), ts = arr(a[9], null, 'tasks');
+    var mode = MODE[int(a[7], 0, 1, 'mode')];
+    need(ws.length >= 1 && ws.length <= LIMITS.workers, 'worker count');
+    need(mode !== 'private' || ws.length === 1, 'private list must hold one worker');
+    need(ts.length <= LIMITS.tasks, 'task count');
+    var workers = ws.map(function(w){
+      arr(w, 2, 'worker');
+      return { id:id(w[0], 'worker'), name:str(w[1], LIMITS.name, 'worker name') };
+    });
+    unique(workers.map(function(w){ return w.id; }), 'worker id');
+    var tasks = ts.map(function(t){
+      arr(t, 6, 'task');
+      return {
+        id: taskId(t[0]),
+        worker: workers[int(t[1], 0, workers.length - 1, 'worker index')].id,
+        text: str(t[2], LIMITS.text, 'task text'),
+        order: int(t[3], 0, 1000000, 'order'),
+        editedAt: time(t[4], 'editedAt'),
+        gone: GONE[int(t[5], 0, 2, 'gone')]
+      };
+    });
+    unique(tasks.map(function(t){ return t.id; }), 'task id');
+    return {
+      f:FORMAT, v:VERSION, k:'list',
+      listId: id(a[2], 'list'), issuedAt: time(a[3], 'issuedAt'),
+      boss: { id:id(boss[0], 'boss'), name:str(boss[1], LIMITS.name, 'boss name') },
+      job:  { id:id(job[0], 'job'),   name:str(job[1], LIMITS.name, 'job name') },
+      day: day(a[6]), mode: mode, workers: workers, tasks: tasks
+    };
+  }
+
+  function reportFromWire(a){
+    arr(a, 6, 'report');
+    var ts = arr(a[5], null, 'tasks');
+    need(ts.length <= LIMITS.tasks, 'task count');
+    var tasks = ts.map(function(t){
+      arr(t, 4, 'task');
+      return { id:taskId(t[0]), status:STATUS[int(t[1], 0, 2, 'status')],
+               note:str(t[2], LIMITS.note, 'note', { multiline:true, optional:true }),
+               changedAt:time(t[3], 'changedAt', true) };
+    });
+    unique(tasks.map(function(t){ return t.id; }), 'task id');
+    return { f:FORMAT, v:VERSION, k:'report',
+             listId:id(a[2], 'list'), workerId:id(a[3], 'worker'), sentAt:time(a[4], 'sentAt'), tasks:tasks };
+  }
+
+  function fromWire(a, kind){
+    need(Array.isArray(a) && a.length >= 2, 'not a crew payload');
+    if(typeof a[0] === 'number' && a[0] > VERSION) fail('newer');
+    need(a[0] === VERSION, 'version');
+    var k = a[1] === 'l' ? 'list' : a[1] === 'r' ? 'report' : null;
+    need(k, 'kind');
+    if(kind && k !== kind) fail('wrong_kind');
+    return k === 'list' ? listFromWire(a) : reportFromWire(a);
+  }
+
+  function toWire(x){
+    if(x && x.k === 'list'){
+      var idx = {};
+      x.workers.forEach(function(w, i){ idx[w.id] = i; });
+      return [VERSION, 'l', x.listId, x.issuedAt, [x.boss.id, x.boss.name], [x.job.id, x.job.name], x.day,
+              MODE.indexOf(x.mode),
+              x.workers.map(function(w){ return [w.id, w.name]; }),
+              x.tasks.map(function(t){
+                need(has(idx, t.worker), 'task assigned to a worker not on the list');
+                return [t.id, idx[t.worker], t.text, t.order, t.editedAt, GONE.indexOf(t.gone)];
+              })];
+    }
+    if(x && x.k === 'report'){
+      return [VERSION, 'r', x.listId, x.workerId, x.sentAt,
+              x.tasks.map(function(t){ return [t.id, STATUS.indexOf(t.status), t.note, t.changedAt]; })];
+    }
+    fail('invalid', 'unknown kind');
+  }
+
+  // Validate a logical object (e.g. one an app built) by putting it through
+  // the exact path a received payload takes.
+  function validate(x, kind){
+    try { return { ok:true, value:fromWire(JSON.parse(JSON.stringify(toWire(x))), kind) }; }
+    catch(e){ return refusal(e); }
+  }
+
+  // ---- codec ------------------------------------------------------------------
+
+  function concat(chunks, n){
+    var out = new Uint8Array(n), o = 0;
+    chunks.forEach(function(c){ out.set(c, o); o += c.byteLength; });
+    return out;
+  }
+
+  async function readAll(stream, cap){
+    var rd = stream.getReader(), chunks = [], n = 0;
+    for(;;){
+      var r = await rd.read();
+      if(r.done) break;
+      n += r.value.byteLength;
+      if(cap != null && n > cap){ try { await rd.cancel(); } catch(e){} fail('too_big', 'decompressed past cap'); }
+      chunks.push(r.value);
+    }
+    return concat(chunks, n);
+  }
+
+  function deflate(bytes){
+    return readAll(new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw')));
+  }
+  // Streams and counts as it goes, so a bomb is cut off at the cap instead of
+  // being inflated whole and measured afterwards.
+  function inflate(bytes, cap){
+    return readAll(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw')), cap);
+  }
+
+  async function encode(x){
+    try {
+      var v = validate(x);
+      if(!v.ok) return v;
+      var json = JSON.stringify(toWire(v.value));
+      var bytes = new TextEncoder().encode(json);
+      if(bytes.length > LIMITS.bytes) fail('too_big', 'payload over limit');
+      var payload = CODEC + b64e(await deflate(bytes));
+      if(payload.length > LIMITS.encoded) fail('too_big', 'encoded over limit');
+      return { ok:true, value:payload, bytes:bytes.length };
+    } catch(e){ return refusal(e); }
+  }
+
+  // payload string → validated logical object. `kind` ('list'|'report'),
+  // when given, refuses the other kind.
+  async function decode(payload, kind){
+    try {
+      if(typeof payload !== 'string' || payload.length === 0) fail('damaged', 'empty');
+      if(payload.length > LIMITS.encoded) fail('too_big', 'encoded over limit');
+      if(payload[0] !== CODEC){
+        if(/^[2-9A-Za-z]/.test(payload)) fail('newer', 'codec ' + payload[0]);
+        fail('damaged', 'codec');
+      }
+      if(!PAYLOAD_RE.test(payload)) fail('damaged', 'charset');
+      var raw = await inflate(b64d(payload.slice(1)), LIMITS.bytes);
+      var json;
+      try { json = new TextDecoder('utf-8', { fatal:true }).decode(raw); } catch(e){ fail('damaged', 'utf-8'); }
+      var a;
+      try { a = JSON.parse(json); } catch(e){ fail('damaged', 'json'); }
+      return { ok:true, value:fromWire(a, kind) };
+    } catch(e){ return refusal(e); }
+  }
+
+  // ---- links and files ----------------------------------------------------------
+
+  function linkFor(kind, payload){ return LINK[kind] + payload; }
+
+  // Pull the payload out of a location.hash. Returns null unless the hash is
+  // exactly '#crew=<payload>' (or '#report=…') in the payload alphabet — the
+  // hash is untrusted input, and anything else is not ours to interpret.
+  function fromHash(hash, kind){
+    var key = kind === 'list' ? '#crew=' : kind === 'report' ? '#report=' : null;
+    if(!key || typeof hash !== 'string' || hash.indexOf(key) !== 0) return null;
+    var p = hash.slice(key.length);
+    return (p.length <= LIMITS.encoded && PAYLOAD_RE.test(p)) ? p : null;
+  }
+
+  // The file fallback wraps the SAME payload, so a file goes through the one
+  // decoder a link does — no second parser to keep honest.
+  function fileFor(list, payload){
+    var slug = function(s){ return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'job'; };
+    return { name:'notebuilt-crew-' + slug(list.job.name) + '-' + list.day + '.json',
+             text:JSON.stringify({ f:FORMAT, k:'list', p:payload }) };
+  }
+  // Is this parsed JSON a crew file? Returns the payload string or null; the
+  // caller then decode()s it like any link.
+  function fromFile(obj){
+    if(!obj || typeof obj !== 'object' || obj.f !== FORMAT || obj.k !== 'list') return null;
+    return (typeof obj.p === 'string' && obj.p.length <= LIMITS.encoded && PAYLOAD_RE.test(obj.p)) ? obj.p : null;
+  }
+
+  // ---- merge: worker side ----------------------------------------------------------
+  // One writer per field: the boss owns text/order/worker/gone (versioned by
+  // editedAt), the worker owns status/note (changedAt). Newer wins, a tie keeps
+  // what's there. That makes a re-import a no-op and arrival order irrelevant.
+
+  function sortTasks(ts){
+    return ts.sort(function(a, b){ return a.order - b.order || parseInt(a.id, 36) - parseInt(b.id, 36); });
+  }
+
+  // stored: the list already on the device (or null). incoming: a decoded list.
+  // → {ok, list, changed}. Omission is never deletion: a task missing from the
+  // incoming list is kept exactly as it was.
+  function mergeList(stored, incoming){
+    try {
+      if(!stored) return { ok:true, list:clone(incoming), changed:true };
+      if(stored.listId !== incoming.listId || stored.boss.id !== incoming.boss.id ||
+         stored.job.id !== incoming.job.id || stored.day !== incoming.day)
+        fail('list_mismatch');
+      var newer = incoming.issuedAt > stored.issuedAt;
+      var head = newer ? incoming : stored, tail = newer ? stored : incoming;
+      var out = clone(stored);
+      out.issuedAt = head.issuedAt; out.mode = head.mode;   // a job's send mode can change mid-day
+      out.boss = clone(head.boss); out.job = clone(head.job);
+      var seen = {};
+      out.workers = head.workers.concat(tail.workers).filter(function(w){
+        if(has(seen, w.id)) return false; seen[w.id] = 1; return true;
+      }).map(clone);
+      var byId = {};
+      out.tasks.forEach(function(t){ byId[t.id] = t; });
+      incoming.tasks.forEach(function(t){
+        var mine = byId[t.id];
+        if(!mine){ byId[t.id] = clone(t); return; }
+        if(t.editedAt > mine.editedAt){
+          mine.text = t.text; mine.order = t.order; mine.worker = t.worker;
+          mine.gone = t.gone; mine.editedAt = t.editedAt;
+        }
+      });
+      out.tasks = sortTasks(Object.keys(byId).map(function(k){ return byId[k]; }));
+      return { ok:true, list:out, changed:JSON.stringify(out) !== JSON.stringify(stored) };
+    } catch(e){ return refusal(e); }
+  }
+
+  // The worker's own record of their tasks: { <taskId>: {status, note, changedAt} }.
+  function setStatus(state, tid, status, note, now){
+    need(STATUS.indexOf(status) >= 0, 'status');
+    str(note || '', LIMITS.note, 'note', { multiline:true, optional:true });
+    var out = clone(state || {}), prev = out[tid];
+    out[tid] = { status:status, note:note || '', changedAt:stamp(prev && prev.changedAt, now) };
+    return out;
+  }
+
+  // The tasks a worker should see as theirs right now.
+  function liveTasksFor(list, workerId){
+    return list.tasks.filter(function(t){ return t.worker === workerId && !t.gone; });
+  }
+
+  // A full snapshot of this worker's live tasks, every time.
+  function buildReport(list, workerId, state, now){
+    state = state || {};
+    return {
+      f:FORMAT, v:VERSION, k:'report', listId:list.listId, workerId:workerId, sentAt:Math.floor(now),
+      tasks: liveTasksFor(list, workerId).map(function(t){
+        var s = has(state, t.id) ? state[t.id] : null;
+        return s ? { id:t.id, status:s.status, note:s.note, changedAt:s.changedAt }
+                 : { id:t.id, status:'open', note:'', changedAt:0 };
+      })
+    };
+  }
+
+  // ---- boss side ----------------------------------------------------------------
+  // sent: { <workerId>: {at, ids:[taskId…]} } — which tasks each worker has been
+  // given as theirs. It is what lets a resend carry tombstones (a task that
+  // left a worker's slice) and what tells a reassignment race apart from a
+  // report reaching for a task that was never that worker's.
+
+  function sliceFor(list, workerId, sent, now){
+    var w = list.workers.filter(function(x){ return x.id === workerId; })[0];
+    need(w, 'worker not on list');
+    var had = {};
+    ((sent && sent[workerId] && sent[workerId].ids) || []).forEach(function(i){ had[i] = 1; });
+    var tasks = [];
+    list.tasks.forEach(function(t){
+      if(t.worker === workerId && !t.gone) tasks.push(clone(t));
+      else if(has(had, t.id))
+        tasks.push({ id:t.id, worker:workerId, text:t.text, order:t.order, editedAt:t.editedAt,
+                     gone:t.gone || 'reassigned' });
+    });
+    return { f:FORMAT, v:VERSION, k:'list', listId:list.listId, issuedAt:Math.floor(now),
+             boss:clone(list.boss), job:clone(list.job), day:list.day, mode:'private',
+             workers:[clone(w)], tasks:tasks };
+  }
+
+  function crewPayloadFor(list, now){
+    var out = clone(list);
+    out.mode = 'crew'; out.issuedAt = Math.floor(now);
+    return out;
+  }
+
+  // Record a send to these workers. ids accumulate so a tombstone keeps
+  // travelling on every later resend.
+  function recordSend(sent, list, workerIds, now){
+    var out = clone(sent || {});
+    workerIds.forEach(function(wid){
+      var ids = {};
+      ((out[wid] && out[wid].ids) || []).forEach(function(i){ ids[i] = 1; });
+      liveTasksFor(list, wid).forEach(function(t){ ids[t.id] = 1; });
+      out[wid] = { at:Math.floor(now), ids:Object.keys(ids).sort() };
+    });
+    return out;
+  }
+
+  // "Changes not sent": has anything this worker should hear about been
+  // edited since their last send?
+  function changesNotSent(list, workerId, sent){
+    var s = sent && sent[workerId];
+    if(!s) return liveTasksFor(list, workerId).length > 0;
+    var had = {};
+    s.ids.forEach(function(i){ had[i] = 1; });
+    return list.tasks.some(function(t){
+      var live = t.worker === workerId && !t.gone;
+      if(live && !has(had, t.id)) return true;
+      return (live || has(had, t.id)) && t.editedAt > s.at;
+    });
+  }
+
+  // received: { <workerId>: {sentAt, tasks:{<taskId>:{status,note,changedAt}}} }
+  // A report can change only status and note, only on this list, and only for
+  // that worker's tasks. → {ok, received, changed, applied, skipped:[{id,why,to}]}
+  function mergeReport(list, sent, received, report){
+    try {
+      if(!list || list.listId !== report.listId) fail('unknown_list');
+      if(!list.workers.some(function(w){ return w.id === report.workerId; })) fail('unknown_worker');
+      var byId = {}, had = {};
+      list.tasks.forEach(function(t){ byId[t.id] = t; });
+      ((sent && sent[report.workerId] && sent[report.workerId].ids) || []).forEach(function(i){ had[i] = 1; });
+      // Check every entry before touching anything: no partial imports.
+      report.tasks.forEach(function(r){
+        var t = byId[r.id];
+        if(!t) fail('unknown_task', r.id);
+        if(t.worker !== report.workerId && !has(had, r.id)) fail('not_theirs', r.id);
+      });
+      var out = clone(received || {}), wid = report.workerId;
+      var mine = out[wid] || (out[wid] = { sentAt:0, tasks:{} });
+      var applied = 0, skipped = [];
+      report.tasks.forEach(function(r){
+        var t = byId[r.id];
+        if(t.worker !== wid){ skipped.push({ id:r.id, why:'reassigned', to:t.worker }); return; }
+        if(t.gone){ skipped.push({ id:r.id, why:'cancelled', to:null }); return; }
+        var cur = mine.tasks[r.id];
+        if(!cur || r.changedAt > cur.changedAt){
+          mine.tasks[r.id] = { status:r.status, note:r.note, changedAt:r.changedAt }; applied++;
+        }
+      });
+      if(report.sentAt > mine.sentAt) mine.sentAt = report.sentAt;
+      return { ok:true, received:out, changed:JSON.stringify(out) !== JSON.stringify(received || {}),
+               applied:applied, skipped:skipped };
+    } catch(e){ return refusal(e); }
+  }
+
+  // Board notices for skipped entries, e.g.
+  // "Joe reported on 1 task now assigned to Maria, kept Maria's".
+  function describeSkips(list, workerId, skipped){
+    var name = function(wid){ var w = list.workers.filter(function(x){ return x.id === wid; })[0]; return w ? w.name : 'someone else'; };
+    var who = name(workerId), byTo = {}, cancelled = 0, out = [];
+    skipped.forEach(function(s){ if(s.why === 'cancelled') cancelled++; else byTo[s.to] = (byTo[s.to] || 0) + 1; });
+    Object.keys(byTo).forEach(function(to){
+      var n = byTo[to], other = name(to);
+      out.push(who + ' reported on ' + n + ' task' + (n === 1 ? '' : 's') + ' now assigned to ' + other + ', kept ' + other + '’s');
+    });
+    if(cancelled) out.push(who + ' reported on ' + cancelled + ' cancelled task' + (cancelled === 1 ? '' : 's') + ', left as cancelled');
+    return out;
+  }
+
+  var api = {
+    FORMAT:FORMAT, VERSION:VERSION, LIMITS:LIMITS, LINK:LINK, REASONS:REASONS,
+    newId:newId, nextTaskId:nextTaskId, stamp:stamp,
+    validate:validate, encode:encode, decode:decode,
+    linkFor:linkFor, fromHash:fromHash, fileFor:fileFor, fromFile:fromFile,
+    mergeList:mergeList, setStatus:setStatus, liveTasksFor:liveTasksFor, buildReport:buildReport,
+    sliceFor:sliceFor, crewPayloadFor:crewPayloadFor, recordSend:recordSend,
+    changesNotSent:changesNotSent, mergeReport:mergeReport, describeSkips:describeSkips,
+    _wire:{ toWire:toWire, fromWire:fromWire, b64e:b64e, b64d:b64d, deflate:deflate, inflate:inflate, CODEC:CODEC }
+  };
+  global.EGSCrew = api;
+  if(typeof module !== 'undefined' && module.exports) module.exports = api;
+
+})(typeof globalThis !== 'undefined' ? globalThis : typeof self !== 'undefined' ? self : this);
+/* EGS-SHARED:crew-task END */
+</script>
+<script>
+// ============================================================================
+//  Self-check page logic. Payloads come from the real encoder (EGSCrew, above).
+//
+//  A test link is the real link shape with a 14-character self-check header in
+//  front of the payload, all inside the payload alphabet [A-Za-z0-9_-] so a
+//  chat app's linkifier sees nothing a real link wouldn't show it:
+//    https://pro.notebuilt.ca/#crew=<LLLLLL><cccccccc><payload>
+//    https://pro.notebuilt.ca/#report=<LLLLLL><cccccccc><payload>
+//  LLLLLL   = the whole link's length in characters, zero-padded decimal
+//  cccccccc = FNV-1a 32-bit of the payload, lowercase hex
+//  The header sits at the FRONT because truncation eats the tail.
+//  Everything in the hash is untrusted: it is only ever measured, compared,
+//  handed to EGSCrew.decode, and written with textContent.
+// ============================================================================
+'use strict';
+var C = window.EGSCrew;
+var BASE = 'https://pro.notebuilt.ca/';
+var MARKER_KEY = 'notebuiltpro.selfcheck.marker';   // the real Pro build drops this key
+var HEAD_LEN = 14;
+var HEAD_RE = /^\d{6}[0-9a-f]{8}$/;
+
+function $(id){ return document.getElementById(id); }
+function el(tag, cls, text){
+  var e = document.createElement(tag);
+  if(cls) e.className = cls;
+  if(text != null) e.textContent = text;
+  return e;
+}
+
+function fnv(s){
+  var h = 0x811c9dc5;
+  for(var i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return ('0000000' + (h >>> 0).toString(16)).slice(-8);
+}
+
+// payload → the full test link. key is 'crew' or 'report'.
+function testLink(key, payload){
+  var total = BASE.length + 1 + key.length + 1 + HEAD_LEN + payload.length;
+  return BASE + '#' + key + '=' + ('00000' + total).slice(-6) + fnv(payload) + payload;
+}
+
+// ---- arrival: one verdict for whatever is in the hash ------------------------
+
+// → { cls, verdict, detail }
+async function inspect(hash){
+  var got = BASE.length + hash.length;
+  var m = /^#(crew|report)=([\s\S]*)$/.exec(hash);
+  if(!m){
+    if('#crew='.indexOf(hash) === 0 || '#report='.indexOf(hash) === 0)
+      return { cls:'bad', verdict:'TRUNCATED (got ' + got + ', cut off before the declared length)', detail:'' };
+    return { cls:'warn', verdict:C.REASONS.wrong_kind, detail:'The part after # isn’t a crew or report link.' };
+  }
+  var kind = m[1] === 'crew' ? 'list' : 'report', body = m[2];
+  var head = body.slice(0, HEAD_LEN), payload = body.slice(HEAD_LEN);
+
+  if(!HEAD_RE.test(head)){
+    if(body.length < HEAD_LEN && /^\d{0,6}$|^\d{6}[0-9a-f]*$/.test(body))
+      return { cls:'bad', verdict:'TRUNCATED (got ' + got + ', cut off before the declared length)', detail:'' };
+    // No self-check header — e.g. a real link. Only the component can speak to it.
+    var p = C.fromHash(hash, kind);
+    var r = p ? await C.decode(p, kind) : { ok:false, reason:C.REASONS.damaged, code:'damaged' };
+    if(r.ok) return { cls:'warn', verdict:'NO SELF-CHECK HEADER (' + got + ' characters)',
+                      detail:'It decodes as a real ' + describe(r.value) + ', but it carries no declared length, so I can’t say whether anything is missing.' };
+    return { cls:'bad', verdict:r.reason, detail:'No self-check header either. (' + r.code + ', ' + got + ' characters)' };
+  }
+
+  var declared = parseInt(head.slice(0, 6), 10), sum = head.slice(6);
+  if(got < declared) return { cls:'bad', verdict:'TRUNCATED (got ' + got + ' of ' + declared + ')', detail:'' };
+  if(got > declared) return { cls:'bad', verdict:'MANGLED (got ' + got + ' of ' + declared + ' — something was added)', detail:'' };
+  if(fnv(payload) !== sum) return { cls:'bad', verdict:'MANGLED (checksum mismatch)', detail:'The length is right (' + got + ' of ' + declared + '), but characters were changed on the way.' };
+
+  var d = await C.decode(payload, kind);
+  if(!d.ok) return { cls:'bad', verdict:d.reason, detail:'Length and checksum are right (' + got + ' of ' + declared + '), but the decoder refused it. (' + d.code + (d.detail ? ': ' + d.detail : '') + ')' };
+  return { cls:'good', verdict:'WHOLE (' + got + ' of ' + declared + ')', detail:'Decoded as a ' + describe(d.value) + '.' };
+}
+
+function describe(x){
+  var n = x.tasks.length + ' task' + (x.tasks.length === 1 ? '' : 's');
+  if(x.k === 'report') return 'report, ' + n;
+  return (x.mode === 'crew' ? 'crew list, ' + x.workers.length + ' workers, ' : 'private list, ') + n;
+}
+
+var arrivalRun = 0;
+async function showArrival(){
+  var hash = location.hash, box = $('arrival');
+  if(!hash || hash === '#'){ box.hidden = true; return; }
+  var run = ++arrivalRun, v = $('verdict');
+  box.hidden = false;
+  v.className = 'verdict'; v.textContent = 'Checking…'; $('verdict-detail').textContent = '';
+  var r;
+  try { r = await inspect(hash); }
+  catch(e){ r = { cls:'bad', verdict:'The check itself failed in this browser.', detail:String(e && e.message || e) }; }
+  if(run !== arrivalRun) return;
+  v.className = 'verdict ' + r.cls; v.textContent = r.verdict;
+  $('verdict-detail').textContent = r.detail;
+}
+
+// ---- storage marker -------------------------------------------------------------
+
+function readMarker(){
+  try {
+    var v = localStorage.getItem(MARKER_KEY);
+    if(v) return { state:'same', value:v };
+    v = C.newId().slice(0, 4) + ' ' + new Date().toISOString();
+    localStorage.setItem(MARKER_KEY, v);
+    if(localStorage.getItem(MARKER_KEY) !== v) return { state:'blocked' };
+    return { state:'new', value:v };
+  } catch(e){ return { state:'blocked' }; }
+}
+
+function showMarker(){
+  var m = readMarker(), arrived = location.hash.length > 1, s = $('store-status');
+  if(m.state === 'same'){ s.className = 'good'; s.textContent = 'Same storage as before.'; }
+  else if(m.state === 'new'){
+    s.className = arrived ? 'bad' : 'warn';
+    s.textContent = arrived ? 'New storage — this browser is separate from where you generated the link.'
+                            : 'New storage — first visit in this browser. Marker written just now.';
+  } else { s.className = 'bad'; s.textContent = 'Storage is blocked — this browser keeps nothing, so I can’t tell.'; }
+  $('store-marker').textContent = m.value ? 'Marker ' + m.value : '';
+  $('clear-ask').hidden = m.state === 'blocked';
+}
+
+$('clear-btn').onclick = function(){ $('clear-ask').hidden = true; $('clear-confirm').hidden = false; };
+$('clear-no').onclick = function(){ $('clear-confirm').hidden = true; $('clear-ask').hidden = false; };
+$('clear-yes').onclick = function(){
+  var ok = true;
+  try { localStorage.removeItem(MARKER_KEY); } catch(e){ ok = false; }
+  $('clear-confirm').hidden = true;
+  var s = $('store-status');
+  s.className = ok ? 'warn' : 'bad';
+  s.textContent = ok ? 'Marker cleared. The next visit will read as new storage.' : 'Couldn’t clear the marker in this browser.';
+  $('store-marker').textContent = '';
+};
+
+// ---- fixtures: the same ones platform/measure_crew_sizes.js uses -----------------
+
+var JOBS = ['Hang doors, unit', 'Base trim, hallway', 'Shim frames, unit', 'Patch ceiling, unit', 'Install closet shelving, unit',
+            'Caulk window casings, unit', 'Haul drywall scrap to bin', 'Set thresholds, unit', 'Hang bifolds, unit', 'Crown in living room, unit'];
+var NAMES = ['Joe', 'Maria', 'Sam', 'Dev', 'Luc', 'Ana', 'Tyler', 'Priya', 'Marc', 'Gord', 'Kim', 'Raj', 'Steph', 'Ben', 'Nadia', 'Pat', 'Omar', 'Jess', 'Will', 'Chantal'];
+function list(nWorkers, nTasksEach, text, T0){
+  var workers = NAMES.slice(0, nWorkers).map(function(n){ return { id:C.newId(), name:n }; });
+  var tasks = [], n = 0;
+  workers.forEach(function(w){ for(var i = 0; i < nTasksEach; i++){ n++;
+    tasks.push({ id:n.toString(36), worker:w.id, text:text(i, n), order:n, editedAt:T0, gone:null }); } });
+  return { f:'egs-crew', v:1, k:'list', listId:C.newId(), issuedAt:T0, boss:{ id:C.newId(), name:'Mike' },
+           job:{ id:C.newId(), name:'Oak St reno' }, day:'2026-09-28', mode:'crew', workers:workers, tasks:tasks };
+}
+function real(i, n){ return JOBS[i % JOBS.length] + ' ' + (200 + n); }
+function worst(){ return Array(201).join('x').replace(/x/g, function(){ return 'abcdefghijklmnopqrstuvwxyz0123456789 '[Math.random() * 37 | 0]; }); }
+function realNote(i){ return ['', 'Waiting on electrician', '', 'Need more 2-1/4 casing', ''][i % 5]; }
+
+var worstCase = false;
+var GENS = [
+  { id:'slice',  title:'Private slice (10 tasks)',          key:'crew',   link:'list' },
+  { id:'crew',   title:'Crew link (20 workers × 10 tasks)', key:'crew',   link:'list' },
+  { id:'report', title:'Report (10 tasks)',                 key:'report', link:'report' }
+];
+
+function fixture(id){
+  var T0 = Math.floor(Date.now() / 1000);
+  var crew = list(20, 10, worstCase ? worst : real, T0);
+  if(id === 'crew') return crew;
+  var priv = C.sliceFor(crew, crew.workers[0].id, {}, T0);
+  if(id === 'slice') return priv;
+  var state = {};
+  priv.tasks.forEach(function(t, i){
+    state = C.setStatus(state, t.id, ['done', 'waiting', 'open'][i % 3],
+                        worstCase ? worst().slice(0, 200) + worst().slice(0, 80) : realNote(i), T0 + i);
+  });
+  return C.buildReport(priv, priv.workers[0].id, state, T0 + 99);
+}
+
+function copyText(ta, btn){
+  var say = function(ok){
+    btn.textContent = ok ? 'Copied' : 'Couldn’t copy — select it by hand';
+    setTimeout(function(){ btn.textContent = 'Copy'; }, 2500);
+  };
+  var byHand = function(){
+    try { ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); return document.execCommand('copy'); }
+    catch(e){ return false; }
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText)
+    navigator.clipboard.writeText(ta.value).then(function(){ say(true); }, function(){ say(byHand()); });
+  else say(byHand());
+}
+
+GENS.forEach(function(g){
+  var box = el('div', 'gen');
+  box.appendChild(el('h3', null, g.title));
+  var go = el('button', 'primary', 'Generate'); go.type = 'button'; go.id = 'gen-' + g.id;
+  box.appendChild(go);
+  var out = el('div'); out.hidden = true; out.id = 'out-' + g.id;
+  var ta = el('textarea'); ta.readOnly = true; ta.id = 'link-' + g.id; ta.setAttribute('aria-label', g.title + ' link');
+  var count = el('p'), note = el('p', 'dim');
+  var row = el('div', 'row');
+  var copy = el('button', null, 'Copy'); copy.type = 'button'; copy.id = 'copy-' + g.id;
+  var open = el('a', 'btn', 'Open here'); open.id = 'open-' + g.id;
+  row.appendChild(copy); row.appendChild(open);
+  out.appendChild(ta); out.appendChild(count); out.appendChild(note); out.appendChild(row);
+  box.appendChild(out);
+  $('gens').appendChild(box);
+
+  copy.onclick = function(){ copyText(ta, copy); };
+  go.onclick = async function(){
+    go.disabled = true;
+    var e;
+    try { e = await C.encode(fixture(g.id)); }
+    catch(err){ e = { ok:false, reason:'Couldn’t build this link in this browser.', code:'error', detail:String(err && err.message || err) }; }
+    go.disabled = false;
+    out.hidden = false;
+    if(!e.ok){
+      ta.hidden = true; row.hidden = true;
+      count.className = 'bad'; count.textContent = e.reason;
+      note.textContent = '(' + e.code + (e.detail ? ': ' + e.detail : '') + ')';
+      return;
+    }
+    var link = testLink(g.key, e.value);
+    ta.hidden = false; row.hidden = false;
+    ta.value = link;
+    // Open on THIS page, wherever it is served from; the link text stays the real address.
+    open.href = location.pathname + link.slice(BASE.length);
+    count.className = '';
+    count.textContent = '';
+    count.appendChild(el('span', 'count', link.length + ' characters'));
+    count.appendChild(document.createTextNode(worstCase ? ' · worst-case text' : ' · realistic text'));
+    note.textContent = 'The real link would be ' + C.linkFor(g.link, e.value).length + ' characters (' + e.bytes +
+                       ' B of JSON). This one adds the ' + HEAD_LEN + '-character self-check header' +
+                       (g.link === 'list' ? ' and points at pro.notebuilt.ca instead of notebuilt.ca.' : '.');
+  };
+});
+
+function setText(w){
+  worstCase = w;
+  $('text-real').setAttribute('aria-pressed', String(!w));
+  $('text-worst').setAttribute('aria-pressed', String(w));
+}
+$('text-real').onclick = function(){ setText(false); };
+$('text-worst').onclick = function(){ setText(true); };
+
+// ---- cold open --------------------------------------------------------------------
+
+$('ver').textContent = 'Temporary test page · ' + (window.EGS_VERSION || 'dev build');
+$('ua').textContent = navigator.userAgent;
+showMarker();
+showArrival();
+window.addEventListener('hashchange', showArrival);
+</script>
+</body>
+</html>
