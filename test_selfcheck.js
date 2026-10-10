@@ -70,6 +70,17 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
         links[(worstCase ? 'w_' : 'r_') + g] = link;
       }
     }
+    // --- fixed-size links: a real payload padded to an exact length
+    const fixed = {};
+    for(const n of [800, 1200, 1600, 2000, 2400]){
+      await ev('document.getElementById("gen-fix' + n + '").click()');
+      const link = await until('document.getElementById("link-fix' + n + '").value');
+      const txt = await ev('document.getElementById("out-fix' + n + '").textContent');
+      const title = await ev('document.getElementById("gen-fix' + n + '").previousSibling.textContent');
+      ok(link.length === n && title === n + ' characters' && txt.indexOf(n + ' characters exactly') >= 0 && /^https:\/\/pro\.notebuilt\.ca\/#crew=\d{6}[0-9a-f]{8}p\d{6}1[A-Za-z0-9_-]+$/.test(link),
+         'fixed ' + n + ': link is exactly ' + n + ' characters and labelled so', link.length + ' chars; ' + txt.replace(link, '').slice(0, 110));
+      fixed[n] = link;
+    }
     ok(await ev('!!document.getElementById("copy-crew") && document.getElementById("copy-crew").textContent==="Copy"'), 'each link has a Copy button');
     ok(await ev('document.documentElement.scrollWidth') <= 320, '320px: no sideways scroll with all three links shown (dark)', String(await ev('document.documentElement.scrollWidth')));
     await shot('320-dark.png');
@@ -79,10 +90,27 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     await shot('320-light.png');
     await send('Emulation.setEmulatedMedia', { features:[{ name:'prefers-color-scheme', value:'dark' }] });
 
+    // --- "Open here": a same-page tap must put the verdict in front of the person
+    await ev('window.scrollTo(0, document.body.scrollHeight); document.getElementById("verdict").textContent = "stale"; document.getElementById("open-slice").click()');
+    await sleep(800);
+    const oh = JSON.parse(await ev('(function(){var a=document.getElementById("arrival"),r=a.getBoundingClientRect();return JSON.stringify({hidden:a.hidden,verdict:document.getElementById("verdict").textContent,top:Math.round(r.top),vh:innerHeight,scrollY:Math.round(scrollY),hash:location.hash.length})})()'));
+    ok(/^WHOLE/.test(oh.verdict), 'Open here: the page checks the link it was sent to', JSON.stringify(oh));
+    ok(!oh.hidden && oh.top >= 0 && oh.top < oh.vh, 'Open here: the verdict is on screen afterwards', 'verdict box top ' + oh.top + 'px in a ' + oh.vh + 'px viewport, scrollY ' + oh.scrollY);
+    ok(await T('store-status') === 'Same storage as before.', 'Open here: the storage line is re-read', await T('store-status'));
+
     // --- arrival verdicts
     for(const k of Object.keys(links)){
       const L = links[k], h = L.slice(L.indexOf('#')), n = L.length;
       ok(await verdict(h) === 'WHOLE (' + n + ' of ' + n + ')', k + ' arrives WHOLE', await T('verdict') + ' · ' + await T('verdict-detail'));
+    }
+    for(const k of Object.keys(fixed)){
+      const F = fixed[k], fh = F.slice(F.indexOf('#')), fn = F.length;
+      ok(await verdict(fh) === 'WHOLE (' + fn + ' of ' + fn + ')' && /plus \d+ characters of padding/.test(await T('verdict-detail')), 'fixed ' + k + ' arrives WHOLE', await T('verdict') + ' · ' + await T('verdict-detail'));
+      ok(await verdict(fh.slice(0, -1)) === 'TRUNCATED (got ' + (fn - 1) + ' of ' + fn + ')', '      1 character of padding cut → TRUNCATED, not WHOLE', await T('verdict'));
+      ok(await verdict(fh.slice(0, -120)) === 'TRUNCATED (got ' + (fn - 120) + ' of ' + fn + ')', '      120 characters of padding cut → TRUNCATED', await T('verdict'));
+      ok(await verdict(fh.slice(0, 300)) === 'TRUNCATED (got 325 of ' + fn + ')', '      cut back into the payload → TRUNCATED', await T('verdict'));
+      const last = fh[fh.length - 1] === 'A' ? 'B' : 'A';
+      ok(await verdict(fh.slice(0, -1) + last) === 'MANGLED (checksum mismatch)', '      last padding character changed → MANGLED', await T('verdict'));
     }
     const L = links.r_crew, h = L.slice(L.indexOf('#')), n = L.length;
     ok(await T('store-status') === 'Same storage as before.', 'arrival in the same browser: same storage as before');

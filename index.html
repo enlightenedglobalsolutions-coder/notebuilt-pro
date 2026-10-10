@@ -21,7 +21,7 @@
 <title>Crew link self-check</title>
 <!-- No icon file: an empty data: icon stops the browser asking the server for favicon.ico. -->
 <link rel="icon" href="data:,">
-<script>window.EGS_VERSION = '2026.10.03-1036 (4992a69)';</script>
+<script>window.EGS_VERSION = '2026.10.10-1016 (48e7199)';</script>
 <style>
   :root{
     --ink:#15181D; --card:#1D2128; --line:#333A45; --line-strong:#67758B;
@@ -111,6 +111,12 @@
       <button type="button" id="text-worst" aria-pressed="false">Worst-case text</button>
     </div>
     <div id="gens"></div>
+  </section>
+
+  <section>
+    <h2>Fixed-size links</h2>
+    <p class="dim">To find the longest link that still arrives tappable by text. Each is a real private list padded to an exact length.</p>
+    <div id="fixed"></div>
   </section>
 
   <section>
@@ -684,6 +690,15 @@
 //  LLLLLL   = the whole link's length in characters, zero-padded decimal
 //  cccccccc = FNV-1a 32-bit of the payload, lowercase hex
 //  The header sits at the FRONT because truncation eats the tail.
+//
+//  A fixed-size link (the safe-length ceiling test) is the same thing padded
+//  out to an exact length. After the header comes 'p' and the payload's own
+//  length, then the payload, then random filler from the payload alphabet:
+//    …#crew=<LLLLLL><cccccccc>p<PPPPPP><payload><filler>
+//  A real payload always starts with the codec character '1', so 'p' in that
+//  position is what marks the padded form. In both forms the checksum covers
+//  everything after the header, so filler that is cut or changed is caught
+//  exactly as payload would be.
 //  Everything in the hash is untrusted: it is only ever measured, compared,
 //  handed to EGSCrew.decode, and written with textContent.
 // ============================================================================
@@ -693,6 +708,7 @@ var BASE = 'https://pro.notebuilt.ca/';
 var MARKER_KEY = 'notebuiltpro.selfcheck.marker';   // the real Pro build drops this key
 var HEAD_LEN = 14;
 var HEAD_RE = /^\d{6}[0-9a-f]{8}$/;
+var PLEN_LEN = 6;   // digits of payload length in a padded link
 
 function $(id){ return document.getElementById(id); }
 function el(tag, cls, text){
@@ -712,6 +728,18 @@ function fnv(s){
 function testLink(key, payload){
   var total = BASE.length + 1 + key.length + 1 + HEAD_LEN + payload.length;
   return BASE + '#' + key + '=' + ('00000' + total).slice(-6) + fnv(payload) + payload;
+}
+
+// payload → a test link of exactly `target` characters, or null if it can't fit.
+function paddedLink(key, payload, target){
+  var fixed = BASE.length + 1 + key.length + 1 + HEAD_LEN + 1 + PLEN_LEN + payload.length;
+  if(fixed > target || target > 999999) return null;
+  var B = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  var rnd = new Uint8Array(target - fixed), fill = '';
+  crypto.getRandomValues(rnd);
+  for(var i = 0; i < rnd.length; i++) fill += B[rnd[i] & 63];
+  var rest = 'p' + ('00000' + payload.length).slice(-PLEN_LEN) + payload + fill;
+  return BASE + '#' + key + '=' + ('00000' + target).slice(-6) + fnv(rest) + rest;
 }
 
 // ---- arrival: one verdict for whatever is in the hash ------------------------
@@ -744,9 +772,20 @@ async function inspect(hash){
   if(got > declared) return { cls:'bad', verdict:'MANGLED (got ' + got + ' of ' + declared + ' — something was added)', detail:'' };
   if(fnv(payload) !== sum) return { cls:'bad', verdict:'MANGLED (checksum mismatch)', detail:'The length is right (' + got + ' of ' + declared + '), but characters were changed on the way.' };
 
+  // Padded form: 'p' + payload length + payload + filler. Length and checksum
+  // already cover the filler, so by here every character is accounted for.
+  var pad = 0;
+  if(payload[0] === 'p'){
+    var plen = /^\d+$/.test(payload.slice(1, 1 + PLEN_LEN)) ? parseInt(payload.slice(1, 1 + PLEN_LEN), 10) : -1;
+    var rest = payload.slice(1 + PLEN_LEN);
+    if(plen < 1 || plen > rest.length) return { cls:'bad', verdict:C.REASONS.damaged, detail:'Length and checksum are right (' + got + ' of ' + declared + '), but the padding header doesn’t add up.' };
+    pad = rest.length - plen; payload = rest.slice(0, plen);
+  }
+
   var d = await C.decode(payload, kind);
   if(!d.ok) return { cls:'bad', verdict:d.reason, detail:'Length and checksum are right (' + got + ' of ' + declared + '), but the decoder refused it. (' + d.code + (d.detail ? ': ' + d.detail : '') + ')' };
-  return { cls:'good', verdict:'WHOLE (' + got + ' of ' + declared + ')', detail:'Decoded as a ' + describe(d.value) + '.' };
+  return { cls:'good', verdict:'WHOLE (' + got + ' of ' + declared + ')',
+           detail:'Decoded as a ' + describe(d.value) + (pad ? ', plus ' + pad + ' characters of padding.' : '.') };
 }
 
 function describe(x){
@@ -768,6 +807,16 @@ async function showArrival(){
   if(run !== arrivalRun) return;
   v.className = 'verdict ' + r.cls; v.textContent = r.verdict;
   $('verdict-detail').textContent = r.detail;
+}
+
+// "Open here" (or an edited address bar) changes the hash under a page that is
+// already open. No reload happens and the browser leaves the scroll where it
+// was, so the verdict has to be re-run AND brought on screen, or the tap looks
+// like it did nothing.
+function onHashChange(){
+  showMarker();
+  window.scrollTo(0, 0);
+  showArrival();
 }
 
 // ---- storage marker -------------------------------------------------------------
@@ -830,10 +879,12 @@ var GENS = [
   { id:'crew',   title:'Crew link (20 workers × 10 tasks)', key:'crew',   link:'list' },
   { id:'report', title:'Report (10 tasks)',                 key:'report', link:'report' }
 ];
+// Safe-length ceiling: Oct 3 by text, 544 arrived whole and 3,830 arrived untappable.
+var SIZES = [800, 1200, 1600, 2000, 2400];
 
-function fixture(id){
+function fixture(id, forceReal){
   var T0 = Math.floor(Date.now() / 1000);
-  var crew = list(20, 10, worstCase ? worst : real, T0);
+  var crew = list(20, 10, worstCase && !forceReal ? worst : real, T0);
   if(id === 'crew') return crew;
   var priv = C.sliceFor(crew, crew.workers[0].id, {}, T0);
   if(id === 'slice') return priv;
@@ -859,49 +910,73 @@ function copyText(ta, btn){
   else say(byHand());
 }
 
-GENS.forEach(function(g){
+// One card: a Generate button, then the link, its exact count, Copy and Open here.
+// build() → { ok:true, link, tail, note } or a refusal { ok:false, reason, code, detail }.
+function card(host, id, title, build){
   var box = el('div', 'gen');
-  box.appendChild(el('h3', null, g.title));
-  var go = el('button', 'primary', 'Generate'); go.type = 'button'; go.id = 'gen-' + g.id;
+  box.appendChild(el('h3', null, title));
+  var go = el('button', 'primary', 'Generate'); go.type = 'button'; go.id = 'gen-' + id;
   box.appendChild(go);
-  var out = el('div'); out.hidden = true; out.id = 'out-' + g.id;
-  var ta = el('textarea'); ta.readOnly = true; ta.id = 'link-' + g.id; ta.setAttribute('aria-label', g.title + ' link');
+  var out = el('div'); out.hidden = true; out.id = 'out-' + id;
+  var ta = el('textarea'); ta.readOnly = true; ta.id = 'link-' + id; ta.setAttribute('aria-label', title + ' link');
   var count = el('p'), note = el('p', 'dim');
   var row = el('div', 'row');
-  var copy = el('button', null, 'Copy'); copy.type = 'button'; copy.id = 'copy-' + g.id;
-  var open = el('a', 'btn', 'Open here'); open.id = 'open-' + g.id;
+  var copy = el('button', null, 'Copy'); copy.type = 'button'; copy.id = 'copy-' + id;
+  var open = el('a', 'btn', 'Open here'); open.id = 'open-' + id;
   row.appendChild(copy); row.appendChild(open);
   out.appendChild(ta); out.appendChild(count); out.appendChild(note); out.appendChild(row);
   box.appendChild(out);
-  $('gens').appendChild(box);
+  host.appendChild(box);
 
   copy.onclick = function(){ copyText(ta, copy); };
   go.onclick = async function(){
     go.disabled = true;
-    var e;
-    try { e = await C.encode(fixture(g.id)); }
-    catch(err){ e = { ok:false, reason:'Couldn’t build this link in this browser.', code:'error', detail:String(err && err.message || err) }; }
+    var r;
+    try { r = await build(); }
+    catch(err){ r = { ok:false, reason:'Couldn’t build this link in this browser.', code:'error', detail:String(err && err.message || err) }; }
     go.disabled = false;
     out.hidden = false;
-    if(!e.ok){
+    if(!r.ok){
       ta.hidden = true; row.hidden = true;
-      count.className = 'bad'; count.textContent = e.reason;
-      note.textContent = '(' + e.code + (e.detail ? ': ' + e.detail : '') + ')';
+      count.className = 'bad'; count.textContent = r.reason;
+      note.textContent = '(' + r.code + (r.detail ? ': ' + r.detail : '') + ')';
       return;
     }
-    var link = testLink(g.key, e.value);
     ta.hidden = false; row.hidden = false;
-    ta.value = link;
+    ta.value = r.link;
     // Open on THIS page, wherever it is served from; the link text stays the real address.
-    open.href = location.pathname + link.slice(BASE.length);
+    open.href = location.pathname + r.link.slice(BASE.length);
     count.className = '';
     count.textContent = '';
-    count.appendChild(el('span', 'count', link.length + ' characters'));
-    count.appendChild(document.createTextNode(worstCase ? ' · worst-case text' : ' · realistic text'));
-    note.textContent = 'The real link would be ' + C.linkFor(g.link, e.value).length + ' characters (' + e.bytes +
-                       ' B of JSON). This one adds the ' + HEAD_LEN + '-character self-check header' +
-                       (g.link === 'list' ? ' and points at pro.notebuilt.ca instead of notebuilt.ca.' : '.');
+    count.appendChild(el('span', 'count', r.link.length + ' characters'));
+    count.appendChild(document.createTextNode(r.tail));
+    note.textContent = r.note;
   };
+}
+
+GENS.forEach(function(g){
+  card($('gens'), g.id, g.title, async function(){
+    var e = await C.encode(fixture(g.id));
+    if(!e.ok) return e;
+    return { ok:true, link:testLink(g.key, e.value),
+             tail: worstCase ? ' · worst-case text' : ' · realistic text',
+             note: 'The real link would be ' + C.linkFor(g.link, e.value).length + ' characters (' + e.bytes +
+                   ' B of JSON). This one adds the ' + HEAD_LEN + '-character self-check header' +
+                   (g.link === 'list' ? ' and points at pro.notebuilt.ca instead of notebuilt.ca.' : '.') };
+  });
+});
+
+// Fixed-size links: a real private slice (10 tasks, realistic text), padded to the exact length.
+SIZES.forEach(function(n){
+  card($('fixed'), 'fix' + n, n + ' characters', async function(){
+    var e = await C.encode(fixture('slice', true));
+    if(!e.ok) return e;
+    var link = paddedLink('crew', e.value, n);
+    if(!link || link.length !== n) return { ok:false, reason:'Couldn’t make a link of exactly ' + n + ' characters.', code:'size', detail:'payload is ' + e.value.length };
+    return { ok:true, link:link, tail:' exactly',
+             note: 'A real private slice (' + e.value.length + '-character payload) plus ' +
+                   (n - (BASE.length + 6 + HEAD_LEN + 1 + PLEN_LEN + e.value.length)) + ' characters of padding.' };
+  });
 });
 
 function setText(w){
@@ -918,7 +993,7 @@ $('ver').textContent = 'Temporary test page · ' + (window.EGS_VERSION || 'dev b
 $('ua').textContent = navigator.userAgent;
 showMarker();
 showArrival();
-window.addEventListener('hashchange', showArrival);
+window.addEventListener('hashchange', onHashChange);
 </script>
 </body>
 </html>
