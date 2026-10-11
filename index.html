@@ -21,7 +21,7 @@
 <title>Crew link self-check</title>
 <!-- No icon file: an empty data: icon stops the browser asking the server for favicon.ico. -->
 <link rel="icon" href="data:,">
-<script>window.EGS_VERSION = '2026.10.11-1231 (f17dbd6)';</script>
+<script>window.EGS_VERSION = '2026.10.11-1301 (722aea7)';</script>
 <style>
   :root{
     --ink:#15181D; --card:#1D2128; --line:#333A45; --line-strong:#67758B;
@@ -149,7 +149,10 @@
 //             tasks:[{id, status:'open'|'done'|'waiting', note, changedAt}] }
 //  Parts: a payload too long for one link goes out as several, each holding
 //  some of the tasks. Every payload carries the 8-char sendId of its send, its
-//  part number and the part count (1 of 1 when unsplit). What a device KEEPS
+//  part number and the part count (1 of 1 when unsplit). A part of a
+//  multi-worker list carries only the workers it needs; the merge puts the
+//  roster back together, and keeps a stored list's workers in id order so the
+//  result never depends on which part arrived first. What a device KEEPS
 //  drops those three for a `send` record — { id, parts, have:[n…] } — on the
 //  stored list and on each worker's received entry: the send it is following
 //  and which parts are in. partsStatus() reads it (spec §6 rule 11).
@@ -159,11 +162,11 @@
 //
 //  Wire (positional arrays, then UTF-8 → deflate-raw → base64url, with the
 //  codec character '1' in front so a future codec can be told apart):
-//    LIST   [1,'l',listId,issuedAt,[bossId,bossName],[jobId,jobName],day,
+//    LIST   [2,'l',listId,issuedAt,[bossId,bossName],[jobId,jobName],day,
 //            mode(0 private|1 crew),[[workerId,name]...],
 //            [[taskId,workerIdx,text,order,editedAt,gone(0|1 cancelled|2 reassigned)]...],
 //            [sendId,part,parts]]
-//    REPORT [1,'r',listId,workerId,sentAt,[[taskId,status(0 open|1 done|2 waiting),note,changedAt]...],
+//    REPORT [2,'r',listId,workerId,sentAt,[[taskId,status(0 open|1 done|2 waiting),note,changedAt]...],
 //            [sendId,part,parts]]
 //
 //  Everything that decodes a payload returns {ok:true,value} or
@@ -173,7 +176,9 @@
 (function(global){
   'use strict';
 
-  var FORMAT = 'egs-crew', VERSION = 1, CODEC = '1';
+  // Version 2 (Oct 2026): the wire gained the trailing [sendId,part,parts].
+  // Version 1 was never used outside testing; a v1 payload is refused as 'older'.
+  var FORMAT = 'egs-crew', VERSION = 2, CODEC = '1';
 
   // §4 starting limits. Text lengths count characters (code points), not bytes.
   var LIMITS = { name:40, text:200, note:280, tasks:300, workers:30,
@@ -222,6 +227,7 @@
     damaged:        'This link is damaged or incomplete. Ask for it to be sent again.',
     too_big:        'This is bigger than a crew list or report can be, so I didn’t open it.',
     newer:          'This was made by a newer version of the app. Update the app, then try again.',
+    older:          'This link was made by an older version of the app and can’t be opened any more. Ask for it to be sent again.',
     wrong_kind:     'This isn’t the kind of crew link this app opens.',
     invalid:        'Something in this doesn’t check out, so I didn’t import any of it.',
     list_mismatch:  'This update doesn’t match the list you already have, so I left your list alone.',
@@ -345,12 +351,12 @@
     list.forEach(function(x){ need(!has(seen, x), 'duplicate ' + what); seen[x] = 1; });
   }
   // [sendId, part, parts] — which send a payload belongs to and where it sits
-  // in it. A part holds at least one task unless it is the only part, so there
-  // are never more parts than the task limit.
+  // in it. Every part past the first holds at least one task or one worker
+  // that has no tasks, so there are never more parts than both limits together.
   function sendFromWire(a){
     arr(a, 3, 'send');
     need(typeof a[0] === 'string' && SEND_RE.test(a[0]), 'bad send id');
-    var parts = int(a[2], 1, LIMITS.tasks, 'part count');
+    var parts = int(a[2], 1, LIMITS.tasks + LIMITS.workers, 'part count');
     return { sendId:a[0], part:int(a[1], 1, parts, 'part number'), parts:parts };
   }
 
@@ -413,6 +419,7 @@
   function fromWire(a, kind){
     need(Array.isArray(a) && a.length >= 2, 'not a crew payload');
     if(typeof a[0] === 'number' && a[0] > VERSION) fail('newer');
+    if(Number.isInteger(a[0]) && a[0] >= 1 && a[0] < VERSION) fail('older', 'version ' + a[0]);
     need(a[0] === VERSION, 'version');
     var k = a[1] === 'l' ? 'list' : a[1] === 'r' ? 'report' : null;
     need(k, 'kind');
@@ -556,31 +563,26 @@
   }
   function clip(s){ var c = Array.from(s); return c.length > 40 ? c.slice(0, 40).join('') + '…' : s; }
 
-  // Something won't fit a link even on its own. Say which of three things it
+  // One item won't fit a link even on its own. Say which of three things it
   // is — the caller renders them differently, and a long name must never be
-  // blamed on a task. t is the task that wouldn't fit, or null for none.
-  async function blame(whole, t){
+  // blamed on a task. item is { task } or { worker } (a worker with no tasks),
+  // or null when there was nothing to send but the names.
+  async function blame(whole, item){
+    var t = item && item.task || null;
     if(whole.k === 'report'){
       if(!t) fail('cannot_fit', 'report envelope');
       fail('task_too_long', 'note', { taskId:t.id, field:'note',
         reason:'The note on one task is too long to send in a link. Shorten it, then send again.' });
     }
+    // The smallest part this item could travel in: itself and its own worker.
     var one = clone(whole); one.tasks = t ? [t] : []; one.part = 1; one.parts = 1;
-    var plain = function(o){
-      o = clone(o); o.boss.name = 'x'; o.job.name = 'x';
-      o.workers.forEach(function(w){ w.name = 'x'; });
-      return o;
-    };
-    if(t){
-      // The task in the smallest list there is: its own worker, one-letter names.
-      var least = plain(one);
-      least.workers = least.workers.filter(function(w){ return w.id === t.worker; });
-      least.mode = 'private';
-      if(!(await sized(least)).fits)
-        fail('task_too_long', 'text', { taskId:t.id, field:'text',
-          reason:'“' + clip(t.text) + '” is too long to send in a link. Shorten it, then send again.' });
+    if(item && one.mode === 'crew'){
+      var wid = t ? t.worker : item.worker.id;
+      one.workers = one.workers.filter(function(w){ return w.id === wid; });
     }
-    if((await sized(plain(one))).fits){
+    var plain = clone(one); plain.boss.name = 'x'; plain.job.name = 'x';
+    plain.workers.forEach(function(w){ w.name = 'x'; });
+    if((await sized(plain)).fits){
       // It fits once every name is one letter, so the names are the cause.
       // Name the one that costs the most.
       var who = [{ which:'boss', of:function(o){ return o.boss; } }, { which:'job', of:function(o){ return o.job; } }];
@@ -594,7 +596,11 @@
       fail('names_too_long', worst.which, { which:worst.which, id:worst.id, name:worst.name,
         reason:'The names leave no room for tasks in a link. “' + clip(worst.name) + '” takes the most room. Shorten it, then send again.' });
     }
-    fail('cannot_fit', 'list envelope');
+    if(t) fail('task_too_long', 'text', { taskId:t.id, field:'text',
+      reason:'“' + clip(t.text) + '” is too long to send in a link. Shorten it, then send again.' });
+    // Not a task and not the names: nothing a split or an edit can rescue. With
+    // today's limits no valid payload gets here; it is the guard, not a path.
+    fail('cannot_fit', 'envelope');
   }
 
   // A whole payload (from sliceFor, crewPayloadFor or buildReport) → the links
@@ -603,41 +609,58 @@
   // One part when it fits. Otherwise the fewest parts — tasks kept in order,
   // each part filled until the next task would overflow — that each fit
   // SAFE_LINK_CHARS. Every part carries the payload's sendId and timestamp.
+  // A multi-worker list splits like any other: a part carries only the
+  // workers its tasks belong to, and workers with no tasks ride along after
+  // the last task, so the whole roster still arrives.
   // Refusals the caller must tell apart (rule 12); nothing is returned to send:
   //   task_too_long  { taskId, field:'text'|'note' }            that task can't fit a link at all
   //   names_too_long { which:'boss'|'job'|'worker', id, name }  the names leave no room
-  //   cannot_fit                                                 no split of this fits
+  //   cannot_fit                                                 nothing a split or an edit can rescue
   async function split(x){
     try {
       var v = validate(x);
       if(!v.ok) return v;
-      var whole = v.value, tasks = whole.tasks;
+      var whole = v.value, crew = whole.k === 'list' && whole.mode === 'crew';
+      // What gets dealt out across parts: every task, then (crew lists only)
+      // every worker who has none.
+      var items = whole.tasks.map(function(t){ return { task:t }; });
+      if(crew){
+        var busy = {};
+        whole.tasks.forEach(function(t){ busy[t.worker] = 1; });
+        whole.workers.forEach(function(w){ if(!has(busy, w.id)) items.push({ worker:w }); });
+      }
       var partOf = function(from, to, part, parts){
-        var o = clone(whole); o.tasks = tasks.slice(from, to); o.part = part; o.parts = parts; return o;
+        var o = clone(whole), mine = items.slice(from, to), keep = {};
+        o.tasks = mine.filter(function(it){ return it.task; }).map(function(it){ return it.task; });
+        if(crew){
+          mine.forEach(function(it){ keep[it.task ? it.task.worker : it.worker.id] = 1; });
+          o.workers = o.workers.filter(function(w){ return has(keep, w.id); });
+        }
+        o.part = part; o.parts = parts; return o;
       };
       var entry = function(value, m){ return { part:value.part, parts:value.parts, value:value, payload:m.payload, link:m.link, chars:m.chars }; };
       var done = function(list){ return { ok:true, sendId:whole.sendId, parts:list }; };
 
-      var all = partOf(0, tasks.length, 1, 1), m1 = await sized(all);
+      var all = partOf(0, items.length, 1, 1), m1 = await sized(all);
       if(m1.fits) return done([entry(all, m1)]);
-      if(tasks.length < 2) await blame(whole, tasks[0] || null);
+      if(items.length < 2) await blame(whole, items[0] || null);
 
       // The part count rides in every part, so pack against a guess and raise
       // it until it is right: the links measured are then exactly the links
-      // returned. Holding one task back for each part still to come makes a
+      // returned. Holding one item back for each part still to come makes a
       // guess that is high enough come out at exactly that many parts.
       for(var guess = 2; ; ){
         var out = [];
-        for(var i = 0; i < tasks.length; ){
-          var part = out.length + 1, best = null;
-          var stop = part < guess ? tasks.length - (guess - part) : tasks.length;
+        for(var i = 0; i < items.length; ){
+          var part = out.length + 1, best = null, took = 0;
+          var stop = part < guess ? items.length - (guess - part) : items.length;
           for(var j = i + 1; j <= stop; j++){
             var cand = partOf(i, j, part, Math.max(guess, part)), m = await sized(cand);
             if(!m.fits) break;
-            best = entry(cand, m);
+            best = entry(cand, m); took = j - i;
           }
-          if(!best) await blame(whole, tasks[i]);
-          out.push(best); i += best.value.tasks.length;
+          if(!best) await blame(whole, items[i]);
+          out.push(best); i += took;
         }
         if(out.length === guess) return done(out);
         guess = out.length;
@@ -687,6 +710,10 @@
   // editedAt), the worker owns status/note (changedAt). Newer wins, a tie keeps
   // what's there. That makes a re-import a no-op and arrival order irrelevant.
 
+  // A stored list keeps its workers in id order. Parts of one send carry
+  // different workers and the same timestamp, so any order that leaned on
+  // arrival would differ from phone to phone.
+  function inIdOrder(a, b){ return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; }
   function sortTasks(ts){
     return ts.sort(function(a, b){ return a.order - b.order || parseInt(a.id, 36) - parseInt(b.id, 36); });
   }
@@ -699,6 +726,7 @@
     try {
       if(!stored){
         var first = kept(incoming);
+        first.workers.sort(inIdOrder);
         first.send = follow(null, 0, incoming, incoming.issuedAt);
         return { ok:true, list:first, changed:true };
       }
@@ -714,7 +742,7 @@
       var seen = {};
       out.workers = head.workers.concat(tail.workers).filter(function(w){
         if(has(seen, w.id)) return false; seen[w.id] = 1; return true;
-      }).map(clone);
+      }).map(clone).sort(inIdOrder);
       var byId = {};
       out.tasks.forEach(function(t){ byId[t.id] = t; });
       incoming.tasks.forEach(function(t){
@@ -786,6 +814,7 @@
   function crewPayloadFor(list, now){
     var out = kept(list);
     delete out.send;
+    out.f = FORMAT; out.v = VERSION;
     out.mode = 'crew'; out.issuedAt = Math.floor(now);
     out.sendId = newSendId(); out.part = 1; out.parts = 1;
     return out;
@@ -1075,7 +1104,7 @@ function list(nWorkers, nTasksEach, text, T0){
   var tasks = [], n = 0;
   workers.forEach(function(w){ for(var i = 0; i < nTasksEach; i++){ n++;
     tasks.push({ id:n.toString(36), worker:w.id, text:text(i, n), order:n, editedAt:T0, gone:null }); } });
-  return { f:'egs-crew', v:1, k:'list', listId:C.newId(), issuedAt:T0, sendId:C.newSendId(), part:1, parts:1, boss:{ id:C.newId(), name:'Mike' },
+  return { f:'egs-crew', v:2, k:'list', listId:C.newId(), issuedAt:T0, sendId:C.newSendId(), part:1, parts:1, boss:{ id:C.newId(), name:'Mike' },
            job:{ id:C.newId(), name:'Oak St reno' }, day:'2026-09-28', mode:'crew', workers:workers, tasks:tasks };
 }
 function real(i, n){ return JOBS[i % JOBS.length] + ' ' + (200 + n); }
