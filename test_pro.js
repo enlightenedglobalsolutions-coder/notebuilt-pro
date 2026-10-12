@@ -442,8 +442,25 @@ async function run(){
   ok((await ev('document.querySelectorAll("#banners .banner").length')) === 1 && /Install Notebuilt Pro/.test(await text('#banners')), 'one banner, and install has the slot first');
   await click('[data-action="install-dismiss"]');
   ok((await raw('notebuiltpro.installPromptDismissed')) === '1', 'its dismissal is stored under the app’s own prefix');
-  ok((await ev('document.querySelectorAll("#banners .banner").length')) === 1 && /No backup yet/.test(await text('#banners')), 'then the backup nudge, since there is a name and ID and no backup');
-  ok(!(await overflow()), 'banner: no horizontal scroll at 320px', await overflow());
+  ok((await ev('document.querySelectorAll("#banners .banner").length')) === 0, 'then nothing: a name and an ID alone are not data worth a backup nudge', await text('#banners'));
+  await reload(); await sleep(400);
+  ok((await ev('document.querySelectorAll("#banners .banner").length')) === 0 && (await raw('notebuiltpro.lastBackupAt')) === null, 'and still nothing after a reload, with no backup ever made');
+  // The nudge is held, not removed: it appears once there is crew or a job to lose.
+  { const keep = await raw('notebuiltpro.settings');
+    for(const key of ['notebuiltpro.roster', 'notebuiltpro.jobs']){
+      await seed([['notebuiltpro.settings', keep], ['notebuiltpro.installPromptDismissed', '1'], [key, '[{"id":"x"}]']]);
+      await load('#/home'); await sleep(400);
+      ok((await ev('document.querySelectorAll("#banners .banner").length')) === 1 && /No backup yet/.test(await text('#banners')), 'with ' + key.split('.')[1] + ' on the phone and no backup, the nudge appears');
+    }
+    await seed([['notebuiltpro.settings', keep], ['notebuiltpro.installPromptDismissed', '1'], ['notebuiltpro.jobs', '[{"id":"x"}]'], ['notebuiltpro.lastBackupAt', new Date(Date.now() - 22 * 86400000).toISOString()]]);
+    await load('#/home'); await sleep(400);
+    ok(/Time for a fresh backup/.test(await text('#banners')), 'and again when the last backup is 22 days old');
+    await seed([['notebuiltpro.settings', keep], ['notebuiltpro.installPromptDismissed', '1'], ['notebuiltpro.jobs', '[{"id":"x"}]'], ['notebuiltpro.lastBackupAt', new Date(Date.now() - 20 * 86400000).toISOString()]]);
+    await load('#/home'); await sleep(400);
+    ok((await ev('persistedOk=true,backupNudgeWanted()')) === false && (await ev('persistedOk=false,backupNudgeWanted()')) === true, 'but not for a backup 20 days old, unless the browser has refused to keep the storage');
+    await seed([['notebuiltpro.settings', keep], ['notebuiltpro.installPromptDismissed', '1'], ['notebuiltpro.jobs', '[{"id":"x"}]']]);
+    await load('#/home'); await sleep(400); }
+  ok(/No backup yet/.test(await text('#banners')) && !(await overflow()), 'banner: no horizontal scroll at 320px', await overflow());
   await shot('05-home-nudge-320');
   await click('[data-action="nudge-snooze"]');
   { const until7 = +(await raw('notebuiltpro.backupNudgeSnoozeUntil')) - Date.now();

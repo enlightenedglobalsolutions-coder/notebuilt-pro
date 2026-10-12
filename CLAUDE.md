@@ -154,7 +154,7 @@ phone does not, because nothing is replaced.
 
 ## Tests
 
-`node test_pro.js` — 162 checks, all passing. It serves this folder on
+`node test_pro.js` — 167 checks, all passing. It serves this folder on
 `127.0.0.1:8708` and drives real headless Chrome over CDP on real time.
 `--shots <dir>` also writes screenshots.
 
@@ -188,6 +188,12 @@ Not covered:
 - The beginner-mode test ignores `.rule`: that hairline exists to give up the
   marker's width so nothing else moves. Markers are hosted only in a
   `.sec-head` or as a sheet's `.help-corner`.
+- **The backup nudge never appears in this build.** It is gated on
+  `hasRealData()`: a worker or a job on the phone. A name and an ID alone are
+  not data worth a nudge, and nothing writes the roster or jobs until stage 2.
+  The test seeds those keys to prove the nudge is held, not removed. Because
+  "storage is not persistent" is one of the nudge's triggers, this build also
+  says nothing when the browser declines to keep its storage.
 - `PAYMENT_CONFIG` has only the Interac address. The other tabs say they are
   not set up, rather than linking nowhere.
 - Editing: nobody's data is at stake until the pilot, so direct edits are

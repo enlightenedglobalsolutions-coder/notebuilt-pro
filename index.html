@@ -27,7 +27,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <!-- EGS-STD:coldopen-version -->
-<script>window.EGS_VERSION = '2026.10.12-1105 (e12c003)';</script>
+<script>window.EGS_VERSION = '2026.10.12-1122 (8f1f7cd)';</script>
 <title>Notebuilt Pro</title>
 <meta name="description" content="Task lists for a crew, sent by text. Private, on-device, by EGS.">
 <!-- EGS-STD:themes — this script runs BEFORE the stylesheet so the first paint
@@ -2041,10 +2041,16 @@ function isIOS(){ return /iphone|ipad|ipod/i.test(navigator.userAgent); }
 function installBannerWanted(){ return !isStandalone() && !lsGet(DEVICE.install); }
 /* EGS-STD:backup — the nudge. Two dials: it first appears when the last
    backup is 21+ days old or there has never been one, and dismissing it
-   snoozes it 7 days. Only when there is something to lose. */
+   snoozes it 7 days. Only when there is something real to lose.
+
+   A name is not that. Real data is crew, jobs or lists, and a list cannot
+   exist without a worker and a job, so those two answer for all three
+   without opening IndexedDB at startup. Nothing writes either store until
+   stage 2, so in this build the nudge never appears. */
+function hasRealData(){ return roster.length>0 || jobs.length>0; }
 let persistedOk = null;
 function backupNudgeWanted(){
-  if(!hasIdentity(settings)) return false;
+  if(!hasRealData()) return false;
   if(Date.now() < +(lsGet(DEVICE.nudge)||0)) return false;
   const last = Date.parse(lsGet(DEVICE.lastBackup)||'') || 0;
   return !last || (Date.now()-last) > 21*86400000 || persistedOk===false;
@@ -2069,7 +2075,7 @@ function renderBanners(){
   } else if(backupNudgeWanted()){
     const never = !Date.parse(lsGet(DEVICE.lastBackup)||'');
     h = '<div class="banner"><b>'+(never?'No backup yet':'Time for a fresh backup')+'</b>'
-      +'Your name and ID exist only on this phone. A backup file means a lost phone doesn’t mean a new ID.'
+      +'Your crew, jobs and lists exist only on this phone. A backup file means a lost phone doesn’t lose them, or your ID.'
       +'<div class="acts"><button class="btn sm primary" data-action="export">Back up now</button>'
       +'<button class="btn sm" data-action="nudge-snooze">Later</button></div></div>';
   }
