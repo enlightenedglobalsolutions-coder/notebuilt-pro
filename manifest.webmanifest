@@ -1,0 +1,16 @@
+{
+  "name": "Notebuilt Pro",
+  "short_name": "Notebuilt Pro",
+  "description": "Task lists for a crew, sent by text. Private, offline, on this phone.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#15181D",
+  "theme_color": "#15181D",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

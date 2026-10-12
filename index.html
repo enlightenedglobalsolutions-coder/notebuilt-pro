@@ -1,129 +1,267 @@
 <!doctype html>
-<!-- ===========================================================================
-  Notebuilt Pro — crew link self-check (TEMPORARY test harness for gate 3)
+<!--
+  =============================================================================
+  Notebuilt Pro — task lists for a crew, sent by text.
+  A product of Enlightened Global Solutions (EGS)
   Copyright (c) 2026 Enlightened Global Solutions. All rights reserved.
+  Unauthorised copying, modification, or distribution of this file is
+  prohibited. Source-visible is not open-source.
 
-  NOT an EGS app. It exists to answer, on real phones: does a crew link arrive
-  whole and tappable, and does the tap land in the same browser storage it was
-  generated in? The real Pro build overwrites this file.
-  Deliberately absent: service worker (a cached page would corrupt the test),
-  support / privacy / share / beginner mode.
-  Kept: cold-open version stamp, safe-area insets, clean at 320px, dark + light.
-  The real Pro build must DROP localStorage key notebuiltpro.selfcheck.marker.
-  Spec: docs/specs/notebuilt-pro-phase1-spec.md §5, §9 gate 3.
-============================================================================ -->
+  Built on the EGS platform skeleton, to EGS-STANDARDS.md, from birth.
+  Storage names "notebuiltpro" (IndexedDB) and "notebuiltpro.*" (localStorage)
+  are PERMANENT (Tier 1 rule 9).
+  No freemium gate yet: the pilot is free and the price is decided after it,
+  so the gate row is deliberately absent (EGS-STANDARDS.md §2, the ◇ rule).
+  =============================================================================
+-->
+<!-- EGS-STD:skeleton -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="robots" content="noindex">
-<meta name="color-scheme" content="dark light">
-<title>Crew link self-check</title>
-<!-- No icon file: an empty data: icon stops the browser asking the server for favicon.ico. -->
-<link rel="icon" href="data:,">
-<script>window.EGS_VERSION = '2026.10.12-0947 (7f4fd47)';</script>
+<meta name="theme-color" content="#15181D">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<!-- EGS-STD:coldopen-version -->
+<script>window.EGS_VERSION = '2026.10.12-1105 (e12c003)';</script>
+<title>Notebuilt Pro</title>
+<meta name="description" content="Task lists for a crew, sent by text. Private, on-device, by EGS.">
+<!-- EGS-STD:themes — this script runs BEFORE the stylesheet so the first paint
+     is already the right theme. It only reads; nothing at startup writes.
+     'system' is stamped as itself and the CSS media query follows the phone. -->
+<script>window.NP_THEME_BAR={dark:'#15181D',light:'#F6F3EC'};
+(function(){var m='system';
+  try{var s=localStorage.getItem('notebuiltpro.theme');if(s==='light'||s==='dark')m=s;}catch(e){}
+  document.documentElement.setAttribute('data-theme',m);
+  var dark=(m==='dark')||(m==='system'&&!(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches));
+  var t=document.querySelector('meta[name="theme-color"]');
+  if(t)t.setAttribute('content',dark?window.NP_THEME_BAR.dark:window.NP_THEME_BAR.light);})();</script>
 <style>
+  /* ---- Design tokens: Notebuilt's trade dark-and-gold family ----
+     EGS-STD:themes — the values are Notebuilt's, measured there
+     (audit_contrast.py), and used here in the same pairings.
+
+     THE ROLE RULE: --ink is always the GROUND and --paper is always the TEXT
+     ON IT. The names are roles, not brightnesses; the values swap ends of the
+     scale between themes. --brass is the accent you READ, --brass-fill is the
+     gold PLATE, and --on-brass is the only ink that goes on that plate. */
   :root{
-    --ink:#15181D; --card:#1D2128; --line:#333A45; --line-strong:#67758B;
-    --paper:#ECE6D8; --paper-dim:#A7A294;
-    --brass:#D7A94B; --on-brass:#231A07;
-    --good:#7FCB8F; --bad:#F0907F; --warn:#E5C06A;
+    --ink:#15181D; --ink-2:#1C2027; --ink-3:#252A33;
+    --line:#333A45; --line-soft:#2A2F39; --line-strong:#67758B;
+    --paper:#ECE6D8; --paper-dim:#A7A294; --paper-faint:#949186; --placeholder:#7C7A74;
+    --brass:#D7A94B; --brass-fill:#D7A94B; --on-brass:#231A07;
+    --done:#7E9D63; --danger:#D07A64;
+    --nav-bg:rgba(20,24,29,.92);
+    --scrim:rgba(0,0,0,.55);
+    --shadow-pop:0 8px 22px rgba(0,0,0,.45);
+    --radius:14px; --radius-sm:10px; --tap:46px;
+    --safe-b:env(safe-area-inset-bottom,0px);
+    --safe-t:env(safe-area-inset-top,0px);
+    --safe-l:env(safe-area-inset-left,0px);
+    --safe-r:env(safe-area-inset-right,0px);
+    --serif:ui-serif,Georgia,"Times New Roman",serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
   }
+  /* ORDER MATTERS. The media block is guarded so an explicit choice of night
+     wins over a daylight phone, and the [data-theme="light"] block comes after
+     it because the two have the same specificity. The light ground is the
+     fleet-wide #F6F3EC (EGS-STANDARDS.md §3). */
   @media (prefers-color-scheme: light){
-    :root{
-      --ink:#F6F3EC; --card:#FFFFFF; --line:#D9D3C4; --line-strong:#8A8474;
-      --paper:#1B1D21; --paper-dim:#5A574E;
-      --brass:#7A5A12; --on-brass:#FFFFFF;
-      --good:#1E6B32; --bad:#A3301F; --warn:#6E5200;
+    :root:not([data-theme="dark"]){
+      --ink:#F6F3EC; --ink-2:#FBF9F3; --ink-3:#FFFFFF;
+      --line:#998F78; --line-soft:#C9C0AC; --line-strong:#8B8069;
+      --paper:#1E222A; --paper-dim:#55595F; --paper-faint:#68655C; --placeholder:#87847C;
+      --brass:#855E11; --brass-fill:#D7A94B; --on-brass:#231A07;
+      --done:#4A6B33; --danger:#A83E27;
+      --nav-bg:rgba(251,249,243,.92);
+      --scrim:rgba(38,32,20,.44);
+      --shadow-pop:0 8px 22px rgba(58,48,30,.20);
     }
   }
-  *{ box-sizing:border-box; }
-  html{ -webkit-text-size-adjust:100%; }
-  body{
-    margin:0; background:var(--ink); color:var(--paper);
-    font:16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    padding:calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
-            calc(24px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+  :root[data-theme="light"]{
+    --ink:#F6F3EC; --ink-2:#FBF9F3; --ink-3:#FFFFFF;
+    --line:#998F78; --line-soft:#C9C0AC; --line-strong:#8B8069;
+    --paper:#1E222A; --paper-dim:#55595F; --paper-faint:#68655C; --placeholder:#87847C;
+    --brass:#855E11; --brass-fill:#D7A94B; --on-brass:#231A07;
+    --done:#4A6B33; --danger:#A83E27;
+    --nav-bg:rgba(251,249,243,.92);
+    --scrim:rgba(38,32,20,.44);
+    --shadow-pop:0 8px 22px rgba(58,48,30,.20);
   }
-  main{ max-width:640px; margin:0 auto; }
-  h1{ font-size:22px; line-height:1.2; margin:0 0 4px; }
-  h2{ font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:var(--paper-dim); margin:0 0 10px; font-weight:600; }
-  h3{ font-size:16px; margin:0 0 10px; }
-  p{ margin:0 0 10px; }
-  .dim{ color:var(--paper-dim); font-size:14px; }
-  .ver-stamp{ color:var(--paper-dim); font-size:13px; font-variant-numeric:tabular-nums; margin:0 0 16px; overflow-wrap:anywhere; }
-  section{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin:0 0 14px; }
-  .verdict{ font-size:20px; font-weight:700; line-height:1.25; margin:0 0 8px; overflow-wrap:anywhere; }
-  .good{ color:var(--good); } .bad{ color:var(--bad); } .warn{ color:var(--warn); }
-  .mono{ font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:13px; overflow-wrap:anywhere; }
-  .row{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-  button, a.btn{
-    font:inherit; font-weight:600; min-height:44px; padding:8px 14px; border-radius:10px;
-    border:1px solid var(--line-strong); background:transparent; color:var(--paper);
-    cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; touch-action:manipulation;
-  }
-  button.primary{ background:var(--brass); border-color:var(--brass); color:var(--on-brass); }
-  button[aria-pressed="true"]{ border-color:var(--brass); color:var(--brass); }
-  button:focus-visible, a.btn:focus-visible, textarea:focus-visible{ outline:2px solid var(--brass); outline-offset:2px; }
-  .gen{ border-top:1px solid var(--line); padding-top:14px; margin-top:14px; }
-  textarea{
-    display:block; width:100%; height:112px; margin:10px 0 8px; padding:8px; resize:vertical;
-    background:var(--ink); color:var(--paper); border:1px solid var(--line); border-radius:8px;
-    font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; line-height:1.35; word-break:break-all;
-  }
-  .count{ font-weight:700; font-variant-numeric:tabular-nums; }
-  [hidden]{ display:none !important; }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-text-size-adjust:100%}
+  body{font-family:var(--sans);font-size:15px;line-height:1.45;background:var(--ink);color:var(--paper);
+    min-height:100vh;min-height:100dvh;overscroll-behavior-y:contain;-webkit-tap-highlight-color:transparent;
+    overflow-wrap:anywhere}
+  button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+  input{font:inherit;color:var(--paper)}
+  a{color:var(--brass)}
+  b{font-weight:600}
+  .hidden{display:none!important}
+  .muted{color:var(--paper-dim)}
+  .mono{font-family:var(--mono)}
+  .grow{flex:1;min-width:0}
+  .row{display:flex;align-items:center;gap:12px}
+
+  /* ---- Top bar ---- */
+  .topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;
+    padding:calc(8px + var(--safe-t)) calc(10px + var(--safe-r)) 8px calc(12px + var(--safe-l));
+    background:var(--nav-bg);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line-soft)}
+  .topbar h1{font-family:var(--serif);font-size:21px;font-weight:600;line-height:25px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .eyebrow{display:block;font-family:var(--mono);font-size:10px;line-height:14px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--paper-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .icon-btn{flex:none;width:var(--tap);height:var(--tap);display:inline-flex;align-items:center;
+    justify-content:center;border-radius:12px;color:var(--paper-dim)}
+  .icon-btn:active{background:var(--ink-3)}
+  .icon-btn svg{width:22px;height:22px}
+  .ico{flex:none;display:inline-flex;width:18px;height:18px}
+  .ico svg{width:18px;height:18px}
+  .chev{flex:none;display:inline-flex;width:16px;height:16px;color:var(--paper-faint)}
+  .chev svg{width:16px;height:16px}
+
+  /* The mark. One const (PRO_MARK) draws it everywhere; these classes are the
+     only thing that sizes it, so an unsized copy cannot exist. */
+  .mark{flex:none;display:inline-block}
+  .mark svg{display:block;width:100%;height:100%}
+  .mark-sm{width:34px;height:34px}
+  .mark-lg{width:88px;height:88px}
+
+  .wrap{max-width:640px;margin:0 auto;
+    padding:0 calc(16px + var(--safe-r)) calc(110px + var(--safe-b)) calc(16px + var(--safe-l))}
+
+  /* EGS-STD:coldopen-version — one look for the stamp, wherever it is drawn. */
+  .ver-stamp{font-family:var(--mono);text-align:center;font-size:10.5px;letter-spacing:.12em;
+    color:var(--paper-faint);margin:20px 0 4px}
+
+  /* ---- Cards, rows ---- */
+  .card{background:var(--ink-3);border:1px solid var(--line-soft);border-radius:var(--radius);
+    padding:14px;margin-bottom:12px}
+  .card.prose{font-size:13.5px;line-height:1.6;color:var(--paper-dim)}
+  .card.prose b{color:var(--paper)}
+  .card.tap{cursor:pointer}
+  .card.tap:active{border-color:var(--line)}
+  .sub{font-size:13px;color:var(--paper-dim)}
+  .list{background:var(--ink-3);border:1px solid var(--line-soft);border-radius:var(--radius);
+    margin-bottom:12px;overflow:hidden}
+  .list > *{display:flex;align-items:center;gap:12px;width:100%;min-height:54px;padding:10px 14px;
+    text-align:left;text-decoration:none;color:var(--paper);border-bottom:1px solid var(--line-soft)}
+  .list > *:last-child{border-bottom:0}
+  .list > button:active,.list > a:active{background:var(--ink-2)}
+
+  /* ---- Section heading with a blueprint rule ---- */
+  .sec-head{display:flex;align-items:baseline;gap:10px;margin:18px 0 10px}
+  .sec-head .label{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--paper-dim);white-space:nowrap}
+  .sec-head .rule{flex:1;height:1px;background:var(--line)}
+
+  /* ---- Info markers ----
+     EGS-STD:infomode — the stylesheet half.
+
+     ONE RULE switches every marker off: the [data-guide="off"] line at the
+     bottom of this block. No render function ever asks which mode the app is
+     in; they all draw the marker and the stylesheet decides whether it shows.
+
+     ZERO REFLOW BETWEEN MODES, so there are exactly two hosts:
+       * inside a .sec-head, straight after .label — .rule is flex:1 and
+         swallows the marker's width, and 15px is under the label's line box;
+       * .help-corner, absolute in a sheet's top-right, out of flow.
+     A variable-length string never hosts a marker. test_pro.js diffs every
+     element's box between the two modes across a width sweep. */
+  .help-i{flex:none;align-self:center;position:relative;width:15px;height:15px;padding:0;border-radius:50%;
+    border:1px solid var(--line-strong);background:none;color:var(--paper-dim);font-family:var(--serif);
+    font-size:10px;font-style:italic;line-height:1;display:inline-flex;align-items:center;
+    justify-content:center;vertical-align:-2px}
+  .help-i:active{border-color:var(--brass);color:var(--brass)}
+  .help-i::after{content:'';position:absolute;top:-11px;bottom:-11px;left:-6px;right:-14px}
+  .sec-head .help-i{margin-left:-2px}
+  .help-corner{position:absolute;top:9px;right:12px;z-index:1}
+  .help-corner::after{left:-11px;right:-11px}
+  /* THE ONE RULE. Expert mode is this line and nothing else. */
+  :root[data-guide="off"] .help-i{display:none}
+
+  /* ---- Buttons ---- */
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:var(--tap);
+    padding:10px 16px;border-radius:var(--radius-sm);border:1px solid var(--line-strong);
+    color:var(--paper);font-weight:600;text-align:center;text-decoration:none}
+  .btn:active{background:var(--ink-2)}
+  .btn.primary{background:var(--brass-fill);border-color:var(--brass-fill);color:var(--on-brass)}
+  .btn.primary:active{filter:brightness(.93)}
+  .btn.danger{border-color:var(--danger);color:var(--danger)}
+  .btn.block{display:flex;width:100%}
+  .btn.sm{min-height:38px;padding:7px 12px;font-size:13.5px}
+  .btn[disabled]{opacity:.55}
+
+  /* ---- Fields ---- */
+  .input{display:block;width:100%;min-height:var(--tap);padding:11px 12px;border-radius:var(--radius-sm);
+    border:1px solid var(--line-strong);background:var(--ink-2);color:var(--paper);font-size:16px}
+  .input::placeholder{color:var(--placeholder);opacity:1}
+  .input:focus{outline:2px solid var(--brass);outline-offset:1px}
+  .field-msg{font-size:13px;line-height:1.5;margin:8px 0 0}
+  .field-msg:empty{display:none}
+  .field-msg.warn{color:var(--brass)}
+  .field-msg.bad{color:var(--danger)}
+
+  /* ---- Segmented control and switch: fixed boxes, nothing reflows ---- */
+  .seg{display:flex;border:1px solid var(--line-strong);border-radius:var(--radius-sm);overflow:hidden}
+  .seg button{flex:1;min-height:var(--tap);padding:8px 4px;color:var(--paper-dim);font-weight:600;font-size:14px}
+  .seg button + button{border-left:1px solid var(--line-strong)}
+  .seg button.on{background:var(--brass-fill);color:var(--on-brass)}
+  .switch{flex:none;position:relative;width:50px;height:30px;border-radius:15px;
+    border:1px solid var(--line-strong);background:var(--ink-2)}
+  .switch::after{content:'';position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;
+    background:var(--line-strong)}
+  .switch[aria-checked="true"]{background:var(--brass-fill);border-color:var(--brass-fill)}
+  .switch[aria-checked="true"]::after{left:23px;background:var(--on-brass)}
+
+  /* ---- First run, and the two gates that share its frame ---- */
+  .setup{max-width:480px;margin:0 auto;
+    padding:calc(26px + var(--safe-t)) calc(20px + var(--safe-r)) calc(20px + var(--safe-b)) calc(20px + var(--safe-l))}
+  .setup .mark{display:block;margin:0 auto 12px}
+  .setup h1{font-family:var(--serif);font-size:25px;font-weight:600;text-align:center}
+  .setup .lede{text-align:center;color:var(--paper-dim);font-size:14px;margin:6px 0 4px}
+  .setup .fine{font-size:12.5px;color:var(--paper-dim);margin:10px 0 0}
+  .setup .btn.block{margin-top:12px}
+
+  /* ---- Sheet ---- */
+  #sheet-root .scrim{position:fixed;inset:0;z-index:80;background:var(--scrim);display:flex;
+    align-items:flex-end;justify-content:center}
+  .sheet{position:relative;width:100%;max-width:640px;max-height:88vh;max-height:88dvh;overflow:auto;
+    background:var(--ink-2);border:1px solid var(--line-soft);border-bottom:0;border-radius:18px 18px 0 0;
+    padding:18px calc(16px + var(--safe-r)) calc(18px + var(--safe-b)) calc(16px + var(--safe-l))}
+  .sheet h2{font-family:var(--serif);font-size:19px;font-weight:600;margin:0 34px 12px 0}
+  .sheet p{font-size:14.5px;line-height:1.55;margin-bottom:12px}
+  .sheet .btn.block{margin-top:12px}
+
+  /* ---- Banners (install, backup): one at a time, above the gesture bar ---- */
+  #banners{position:fixed;left:calc(12px + var(--safe-l));right:calc(12px + var(--safe-r));
+    bottom:calc(12px + var(--safe-b));z-index:40}
+  .banner{max-width:616px;margin:0 auto;background:var(--ink-2);border:1px solid var(--line-strong);
+    border-radius:var(--radius);padding:12px;box-shadow:var(--shadow-pop);font-size:13.5px;line-height:1.5}
+  .banner b{display:block;margin-bottom:2px}
+  .banner .acts{display:flex;gap:8px;margin-top:10px}
+  .banner .acts .btn{flex:1}
+
+  /* ---- Toast ---- */
+  #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + var(--safe-b));z-index:120;
+    max-width:calc(100% - 32px);background:var(--paper);color:var(--ink);padding:10px 16px;border-radius:999px;
+    font-size:13.5px;font-weight:600;box-shadow:var(--shadow-pop);opacity:0;pointer-events:none;
+    transition:opacity .18s}
+  #toast.show{opacity:1}
 </style>
 </head>
 <body>
-<main>
-  <h1>Crew link self-check</h1>
-  <!-- EGS-STD:coldopen-version — first screen, no setup in front of it. -->
-  <div class="ver-stamp" id="ver"></div>
-
-  <section id="arrival" hidden aria-live="polite">
-    <h2>This link</h2>
-    <p class="verdict" id="verdict">Checking…</p>
-    <p class="dim" id="verdict-detail"></p>
-  </section>
-
-  <section>
-    <h2>Storage</h2>
-    <p id="store-status"></p>
-    <p class="dim mono" id="store-marker"></p>
-    <div class="row" id="clear-ask">
-      <button type="button" id="clear-btn">Clear marker</button>
-    </div>
-    <div id="clear-confirm" hidden>
-      <p>Clear this browser’s marker? Its next visit will read as new storage.</p>
-      <div class="row">
-        <button type="button" class="primary" id="clear-yes">Yes, clear it</button>
-        <button type="button" id="clear-no">Keep it</button>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <h2>Generate a test link</h2>
-    <p class="dim">Generate, copy, send it through the chat app, then tap it where it arrives.</p>
-    <div class="row" role="group" aria-label="Task text">
-      <button type="button" id="text-real" aria-pressed="true">Realistic text</button>
-      <button type="button" id="text-worst" aria-pressed="false">Worst-case text</button>
-    </div>
-    <div id="gens"></div>
-  </section>
-
-  <section>
-    <h2>Fixed-size links</h2>
-    <p class="dim">To find the longest link that still arrives tappable by text. Each is a real private list padded to an exact length.</p>
-    <div id="fixed"></div>
-  </section>
-
-  <section>
-    <h2>This browser</h2>
-    <p class="dim mono" id="ua"></p>
-  </section>
-</main>
+<div id="app"></div>
+<div id="banners"></div>
+<div id="sheet-root"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 
 <script>
 /* EGS-SHARED:crew-task BEGIN */
@@ -917,321 +1055,1132 @@
 /* EGS-SHARED:crew-task END */
 </script>
 <script>
-// ============================================================================
-//  Self-check page logic. Payloads come from the real encoder (EGSCrew, above).
-//
-//  A test link is the real link shape with a 14-character self-check header in
-//  front of the payload, all inside the payload alphabet [A-Za-z0-9_-] so a
-//  chat app's linkifier sees nothing a real link wouldn't show it:
-//    https://pro.notebuilt.ca/#crew=<LLLLLL><cccccccc><payload>
-//    https://pro.notebuilt.ca/#report=<LLLLLL><cccccccc><payload>
-//  LLLLLL   = the whole link's length in characters, zero-padded decimal
-//  cccccccc = FNV-1a 32-bit of the payload, lowercase hex
-//  The header sits at the FRONT because truncation eats the tail.
-//
-//  A fixed-size link (the safe-length ceiling test) is the same thing padded
-//  out to an exact length. After the header comes 'p' and the payload's own
-//  length, then the payload, then random filler from the payload alphabet:
-//    …#crew=<LLLLLL><cccccccc>p<PPPPPP><payload><filler>
-//  A real payload always starts with the codec character '1', so 'p' in that
-//  position is what marks the padded form. In both forms the checksum covers
-//  everything after the header, so filler that is cut or changed is caught
-//  exactly as payload would be.
-//  Everything in the hash is untrusted: it is only ever measured, compared,
-//  handed to EGSCrew.decode, and written with textContent.
-// ============================================================================
 'use strict';
-var C = window.EGSCrew;
-var BASE = 'https://pro.notebuilt.ca/';
-var MARKER_KEY = 'notebuiltpro.selfcheck.marker';   // the real Pro build drops this key
-var HEAD_LEN = 14;
-var HEAD_RE = /^\d{6}[0-9a-f]{8}$/;
-var PLEN_LEN = 6;   // digits of payload length in a padded link
+/* =============================================================================
+   Notebuilt Pro app logic. Copyright (c) 2026 EGS. All rights reserved.
 
-function $(id){ return document.getElementById(id); }
-function el(tag, cls, text){
-  var e = document.createElement(tag);
-  if(cls) e.className = cls;
-  if(text != null) e.textContent = text;
-  return e;
-}
+   Stage 1 of the phase 1 build: shell, storage, standards, boss identity.
+   Crew, Jobs, Day, Send, Board and Reports are later stages and are not here.
 
-function fnv(s){
-  var h = 0x811c9dc5;
-  for(var i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
-  return ('0000000' + (h >>> 0).toString(16)).slice(-8);
-}
+   The crew-task component above (EGSCrew) is a byte-identical copy of the
+   platform's. It owns ids, limits, the codec and the measuring. Nothing in
+   this file re-implements any of that.
+   ============================================================================= */
 
-// payload → the full test link. key is 'crew' or 'report'.
-function testLink(key, payload){
-  var total = BASE.length + 1 + key.length + 1 + HEAD_LEN + payload.length;
-  return BASE + '#' + key + '=' + ('00000' + total).slice(-6) + fnv(payload) + payload;
-}
+const APP_NAME = 'Notebuilt Pro';   /* change here + in manifest.webmanifest + <title> to rename */
+const APP_ID   = 'notebuilt-pro';   /* backup files and the service-worker cache are named from this */
 
-// payload → a test link of exactly `target` characters, or null if it can't fit.
-function paddedLink(key, payload, target){
-  var fixed = BASE.length + 1 + key.length + 1 + HEAD_LEN + 1 + PLEN_LEN + payload.length;
-  if(fixed > target || target > 999999) return null;
-  var B = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-  var rnd = new Uint8Array(target - fixed), fill = '';
-  crypto.getRandomValues(rnd);
-  for(var i = 0; i < rnd.length; i++) fill += B[rnd[i] & 63];
-  var rest = 'p' + ('00000' + payload.length).slice(-PLEN_LEN) + payload + fill;
-  return BASE + '#' + key + '=' + ('00000' + target).slice(-6) + fnv(rest) + rest;
-}
+/* ---------- storage names: PERMANENT (Tier 1 rule 9) ----------
+   K is what rides in a backup. DEVICE describes this phone, never the data,
+   so it stays out of a backup: restoring a file onto someone else's phone
+   must not decide their theme or hide their help. */
+const K = { settings:'notebuiltpro.settings', roster:'notebuiltpro.roster', jobs:'notebuiltpro.jobs' };
+const DEVICE = {
+  theme:'notebuiltpro.theme', guide:'notebuiltpro.beginner', view:'notebuiltpro.lastView',
+  install:'notebuiltpro.installPromptDismissed', nudge:'notebuiltpro.backupNudgeSnoozeUntil',
+  lastBackup:'notebuiltpro.lastBackupAt'
+};
+/* Lists and reports grow every day, so they live in IndexedDB. The store
+   layout is versioned by IDB_VERSION; the database name never changes. */
+const IDB_NAME = 'notebuiltpro';
+const IDB_VERSION = 1;
+const IDB_STORES = ['lists','reports'];
+/* Left behind on this origin by the self-check harness this app replaced.
+   Never read. Removed by the first ordinary save, so startup stays write-free. */
+const HARNESS_KEY = 'notebuiltpro.selfcheck.marker';
 
-// ---- arrival: one verdict for whatever is in the hash ------------------------
-
-// → { cls, verdict, detail }
-async function inspect(hash){
-  var got = BASE.length + hash.length;
-  var m = /^#(crew|report)=([\s\S]*)$/.exec(hash);
-  if(!m){
-    if('#crew='.indexOf(hash) === 0 || '#report='.indexOf(hash) === 0)
-      return { cls:'bad', verdict:'TRUNCATED (got ' + got + ', cut off before the declared length)', detail:'' };
-    return { cls:'warn', verdict:C.REASONS.wrong_kind, detail:'The part after # isn’t a crew or report link.' };
-  }
-  var kind = m[1] === 'crew' ? 'list' : 'report', body = m[2];
-  var head = body.slice(0, HEAD_LEN), payload = body.slice(HEAD_LEN);
-
-  if(!HEAD_RE.test(head)){
-    if(body.length < HEAD_LEN && /^\d{0,6}$|^\d{6}[0-9a-f]*$/.test(body))
-      return { cls:'bad', verdict:'TRUNCATED (got ' + got + ', cut off before the declared length)', detail:'' };
-    // No self-check header — e.g. a real link. Only the component can speak to it.
-    var p = C.fromHash(hash, kind);
-    var r = p ? await C.decode(p, kind) : { ok:false, reason:C.REASONS.damaged, code:'damaged' };
-    if(r.ok) return { cls:'warn', verdict:'NO SELF-CHECK HEADER (' + got + ' characters)',
-                      detail:'It decodes as a real ' + describe(r.value) + ', but it carries no declared length, so I can’t say whether anything is missing.' };
-    return { cls:'bad', verdict:r.reason, detail:'No self-check header either. (' + r.code + ', ' + got + ' characters)' };
-  }
-
-  var declared = parseInt(head.slice(0, 6), 10), sum = head.slice(6);
-  if(got < declared) return { cls:'bad', verdict:'TRUNCATED (got ' + got + ' of ' + declared + ')', detail:'' };
-  if(got > declared) return { cls:'bad', verdict:'MANGLED (got ' + got + ' of ' + declared + ' — something was added)', detail:'' };
-  if(fnv(payload) !== sum) return { cls:'bad', verdict:'MANGLED (checksum mismatch)', detail:'The length is right (' + got + ' of ' + declared + '), but characters were changed on the way.' };
-
-  // Padded form: 'p' + payload length + payload + filler. Length and checksum
-  // already cover the filler, so by here every character is accounted for.
-  var pad = 0;
-  if(payload[0] === 'p'){
-    var plen = /^\d+$/.test(payload.slice(1, 1 + PLEN_LEN)) ? parseInt(payload.slice(1, 1 + PLEN_LEN), 10) : -1;
-    var rest = payload.slice(1 + PLEN_LEN);
-    if(plen < 1 || plen > rest.length) return { cls:'bad', verdict:C.REASONS.damaged, detail:'Length and checksum are right (' + got + ' of ' + declared + '), but the padding header doesn’t add up.' };
-    pad = rest.length - plen; payload = rest.slice(0, plen);
-  }
-
-  var d = await C.decode(payload, kind);
-  if(!d.ok) return { cls:'bad', verdict:d.reason, detail:'Length and checksum are right (' + got + ' of ' + declared + '), but the decoder refused it. (' + d.code + (d.detail ? ': ' + d.detail : '') + ')' };
-  return { cls:'good', verdict:'WHOLE (' + got + ' of ' + declared + ')',
-           detail:'Decoded as a ' + describe(d.value) + (pad ? ', plus ' + pad + ' characters of padding.' : '.') };
-}
-
-function describe(x){
-  var n = x.tasks.length + ' task' + (x.tasks.length === 1 ? '' : 's') + ', part ' + x.part + ' of ' + x.parts;
-  if(x.k === 'report') return 'report, ' + n;
-  return (x.mode === 'crew' ? 'crew list, ' + x.workers.length + ' workers, ' : 'private list, ') + n;
-}
-
-var arrivalRun = 0;
-async function showArrival(){
-  var hash = location.hash, box = $('arrival');
-  if(!hash || hash === '#'){ box.hidden = true; return; }
-  var run = ++arrivalRun, v = $('verdict');
-  box.hidden = false;
-  v.className = 'verdict'; v.textContent = 'Checking…'; $('verdict-detail').textContent = '';
-  var r;
-  try { r = await inspect(hash); }
-  catch(e){ r = { cls:'bad', verdict:'The check itself failed in this browser.', detail:String(e && e.message || e) }; }
-  if(run !== arrivalRun) return;
-  v.className = 'verdict ' + r.cls; v.textContent = r.verdict;
-  $('verdict-detail').textContent = r.detail;
-}
-
-// "Open here" (or an edited address bar) changes the hash under a page that is
-// already open. No reload happens and the browser leaves the scroll where it
-// was, so the verdict has to be re-run AND brought on screen, or the tap looks
-// like it did nothing.
-function onHashChange(){
-  showMarker();
-  window.scrollTo(0, 0);
-  showArrival();
-}
-
-// ---- storage marker -------------------------------------------------------------
-
-function readMarker(){
-  try {
-    var v = localStorage.getItem(MARKER_KEY);
-    if(v) return { state:'same', value:v };
-    v = C.newId().slice(0, 4) + ' ' + new Date().toISOString();
-    localStorage.setItem(MARKER_KEY, v);
-    if(localStorage.getItem(MARKER_KEY) !== v) return { state:'blocked' };
-    return { state:'new', value:v };
-  } catch(e){ return { state:'blocked' }; }
-}
-
-function showMarker(){
-  var m = readMarker(), arrived = location.hash.length > 1, s = $('store-status');
-  if(m.state === 'same'){ s.className = 'good'; s.textContent = 'Same storage as before.'; }
-  else if(m.state === 'new'){
-    s.className = arrived ? 'bad' : 'warn';
-    s.textContent = arrived ? 'New storage — this browser is separate from where you generated the link.'
-                            : 'New storage — first visit in this browser. Marker written just now.';
-  } else { s.className = 'bad'; s.textContent = 'Storage is blocked — this browser keeps nothing, so I can’t tell.'; }
-  $('store-marker').textContent = m.value ? 'Marker ' + m.value : '';
-  $('clear-ask').hidden = m.state === 'blocked';
-}
-
-$('clear-btn').onclick = function(){ $('clear-ask').hidden = true; $('clear-confirm').hidden = false; };
-$('clear-no').onclick = function(){ $('clear-confirm').hidden = true; $('clear-ask').hidden = false; };
-$('clear-yes').onclick = function(){
-  var ok = true;
-  try { localStorage.removeItem(MARKER_KEY); } catch(e){ ok = false; }
-  $('clear-confirm').hidden = true;
-  var s = $('store-status');
-  s.className = ok ? 'warn' : 'bad';
-  s.textContent = ok ? 'Marker cleared. The next visit will read as new storage.' : 'Couldn’t clear the marker in this browser.';
-  $('store-marker').textContent = '';
+const PAYMENT_CONFIG = {
+  interacEmail: 'egspay.pay@gmail.com',
+  interacMemo: 'Notebuilt Pro Donation',
+  btc: '', stripe: '', paypal: '', wise: ''      /* empty until a real one exists; the tab says so */
+};
+const PAYMENT_TABS = [
+  {id:'interac',label:'Interac'},{id:'btc',label:'Bitcoin'},{id:'card',label:'Card'},
+  {id:'paypal',label:'PayPal'},{id:'wise',label:'Wise'}
+];
+let supportTab = 'interac';
+const SHARE_APP_LINE = 'Notebuilt Pro — task lists for a crew, sent by text. Private, offline, yours.';
+const APP_BACKUP_DESC = "A backup is one file holding everything this app keeps: your name, your permanent ID and, as they arrive, your crew, jobs and lists. Keep it somewhere that isn't this phone. Restoring it on a new phone brings back the same ID, so lists you've already sent still match.";
+const APP_MONETIZATION = {
+  model: 'free',
+  blurb: "Notebuilt Pro is free while it's being tried out on real jobs. When it gets a price, it will be a one-time price: no subscription, and nothing you've made will be held back."
 };
 
-// ---- fixtures: the same ones platform/measure_crew_sizes.js uses -----------------
-
-var JOBS = ['Hang doors, unit', 'Base trim, hallway', 'Shim frames, unit', 'Patch ceiling, unit', 'Install closet shelving, unit',
-            'Caulk window casings, unit', 'Haul drywall scrap to bin', 'Set thresholds, unit', 'Hang bifolds, unit', 'Crown in living room, unit'];
-var NAMES = ['Joe', 'Maria', 'Sam', 'Dev', 'Luc', 'Ana', 'Tyler', 'Priya', 'Marc', 'Gord', 'Kim', 'Raj', 'Steph', 'Ben', 'Nadia', 'Pat', 'Omar', 'Jess', 'Will', 'Chantal'];
-function list(nWorkers, nTasksEach, text, T0){
-  var workers = NAMES.slice(0, nWorkers).map(function(n){ return { id:C.newId(), name:n }; });
-  var tasks = [], n = 0;
-  workers.forEach(function(w){ for(var i = 0; i < nTasksEach; i++){ n++;
-    tasks.push({ id:n.toString(36), worker:w.id, text:text(i, n), order:n, editedAt:T0, gone:null }); } });
-  return { f:'egs-crew', v:2, k:'list', listId:C.newId(), issuedAt:T0, sendId:C.newSendId(), part:1, parts:1, boss:{ id:C.newId(), name:'Mike' },
-           job:{ id:C.newId(), name:'Oak St reno' }, day:'2026-09-28', mode:'crew', workers:workers, tasks:tasks };
-}
-function real(i, n){ return JOBS[i % JOBS.length] + ' ' + (200 + n); }
-function worst(){ return Array(201).join('x').replace(/x/g, function(){ return 'abcdefghijklmnopqrstuvwxyz0123456789 '[Math.random() * 37 | 0]; }); }
-function realNote(i){ return ['', 'Waiting on electrician', '', 'Need more 2-1/4 casing', ''][i % 5]; }
-
-var worstCase = false;
-var GENS = [
-  { id:'slice',  title:'Private slice (10 tasks)',          key:'crew',   link:'list' },
-  { id:'crew',   title:'Crew link (20 workers × 10 tasks)', key:'crew',   link:'list' },
-  { id:'report', title:'Report (10 tasks)',                 key:'report', link:'report' }
+/* EGS-STD:apps-directory — seeded from EGS-STANDARDS.md §3a. Sync from there,
+   never hand-drift. An app with no canonical URL yet is listed without a link. */
+const EGS_APPS = [
+  {name:'Notebuilt', line:'A field notebook for trade crews.', url:'https://notebuilt.ca/'},
+  {name:'What’s For Dinner', line:'Find dinner without the scroll.', url:'https://wfdegs.ca/'},
+  {name:'Stagger', line:'Staggered floor and panel layouts, planned properly.', url:'https://enlightenedglobalsolutions-coder.github.io/paneling-planner/'},
+  {name:'Rollworthy', line:'Vehicle check-outs and inspections, on the device.', url:'https://enlightenedglobalsolutions-coder.github.io/rollworthy/'},
+  {name:'Kept', line:'A quiet, private place for the people you’ve loved.', url:''}
 ];
-// Safe-length ceiling: Oct 3 by text, 544 arrived whole and 3,830 arrived untappable.
-var SIZES = [800, 1200, 1600, 2000, 2400];
 
-function fixture(id, forceReal){
-  var T0 = Math.floor(Date.now() / 1000);
-  var crew = list(20, 10, worstCase && !forceReal ? worst : real, T0);
-  if(id === 'crew') return crew;
-  var priv = C.sliceFor(crew, crew.workers[0].id, {}, T0);
-  if(id === 'slice') return priv;
-  var state = {};
-  priv.tasks.forEach(function(t, i){
-    state = C.setStatus(state, t.id, ['done', 'waiting', 'open'][i % 3],
-                        worstCase ? worst().slice(0, 200) + worst().slice(0, 80) : realNote(i), T0 + i);
-  });
-  return C.buildReport(priv, priv.workers[0].id, state, T0 + 99);
+/* PRO-MARK BEGIN — generated by make_icons.js --mark from the icon geometry. Do not edit by hand. */
+const PRO_MARK = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Notebuilt Pro"><defs><linearGradient id="nppost" x1="0" y1="0" x2="0.6" y2="1"><stop offset="0" stop-color="#AAB6C1"/><stop offset="0.5" stop-color="#8A96A1"/><stop offset="1" stop-color="#646E78"/></linearGradient><linearGradient id="npdiag" x1="0" y1="0" x2="0.6" y2="1"><stop offset="0" stop-color="#CBD6E0"/><stop offset="0.5" stop-color="#A6B2BD"/><stop offset="1" stop-color="#808C97"/></linearGradient><clipPath id="npletter"><rect x="156" y="140" width="52" height="232" /><rect x="150" y="140" width="64" height="18" /><rect x="150" y="354" width="64" height="18" /><rect x="304" y="140" width="52" height="232" /><rect x="298" y="140" width="64" height="18" /><rect x="298" y="354" width="64" height="18" /><polygon points="178,140 236,140 340,372 282,372"/></clipPath></defs><rect width="512" height="512" rx="123" fill="#1A1E25"/><g transform="translate(256,256) scale(0.8) translate(-256,-256)"><g fill="none" stroke="#D6A84B"><circle cx="256" cy="256" r="205" stroke-width="10"/><rect x="111" y="111" width="290" height="290" stroke-width="6"/></g><g fill="#D6A84B"><circle cx="111" cy="111" r="9"/><circle cx="401" cy="111" r="9"/><circle cx="111" cy="401" r="9"/><circle cx="401" cy="401" r="9"/></g><g fill="url(#nppost)"><rect x="156" y="140" width="52" height="232" /><rect x="150" y="140" width="64" height="18" /><rect x="150" y="354" width="64" height="18" /><rect x="304" y="140" width="52" height="232" /><rect x="298" y="140" width="64" height="18" /><rect x="298" y="354" width="64" height="18" /></g><g fill="none" stroke="#39424B" stroke-width="2.5" opacity="0.85"><rect x="156" y="140" width="52" height="232" /><rect x="150" y="140" width="64" height="18" /><rect x="150" y="354" width="64" height="18" /><rect x="304" y="140" width="52" height="232" /><rect x="298" y="140" width="64" height="18" /><rect x="298" y="354" width="64" height="18" /></g><polygon points="178,140 236,140 340,372 282,372" fill="url(#npdiag)" stroke="#39424B" stroke-width="2.5"/><g clip-path="url(#npletter)"><g fill="#4A545E" opacity="0.3"><rect x="140" y="164" width="232" height="3"/><rect x="140" y="188" width="232" height="3"/><rect x="140" y="212" width="232" height="3"/><rect x="140" y="236" width="232" height="3"/><rect x="140" y="260" width="232" height="3"/><rect x="140" y="284" width="232" height="3"/><rect x="140" y="308" width="232" height="3"/><rect x="140" y="332" width="232" height="3"/><rect x="140" y="356" width="232" height="3"/></g></g></g></svg>';
+/* PRO-MARK END */
+function markHtml(size){ return '<span class="mark mark-'+size+'">'+PRO_MARK+'</span>'; }
+
+const I = {
+  back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
+  chevronR:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>',
+  gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M18.5 5.5l-1.8 1.8M7.3 16.7l-1.8 1.8"/></svg>',
+  download:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>',
+  upload:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V5M7 9l5-5 5 5M5 20h14"/></svg>'
+};
+function ico(name){ return '<span class="ico">'+I[name]+'</span>'; }
+
+/* ---------- tiny helpers ---------- */
+const $app = document.getElementById('app');
+const $banners = document.getElementById('banners');
+const $mr = document.getElementById('sheet-root');
+const $toast = document.getElementById('toast');
+/* Every piece of user content goes through this before it meets markup. */
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+let _toastT = null;
+function toast(msg){
+  $toast.textContent = msg; $toast.classList.add('show');
+  clearTimeout(_toastT); _toastT = setTimeout(()=>$toast.classList.remove('show'), 2600);
+}
+function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); return true; }catch(e){ return false; } }
+function isObj(v){ return !!v && typeof v==='object' && !Array.isArray(v); }
+
+/* ============================================================
+   The name check — built on the component's measure(), never on a guess.
+   ============================================================
+   A link has SAFE_LINK_CHARS to carry three names and the tasks. One name
+   alone can never fill it, so "would this name leave no room" only means
+   something once the other two are counted. They are not known when a name
+   is first typed, so the probe assumes they run about as long, in the same
+   script: the job name is this name reversed and the worker name is it
+   shuffled, which keeps the bytes and stops the compressor finding repeats.
+   A caller that knows the real names passes them instead.
+
+     tight — a full-length task will not fit beside these names.
+     none  — not even a one-letter task fits; no list could go out at all.
+
+   Either way it is a warning, shown while typing. The send-time refusal
+   (spec rule 12) stays as the backstop. */
+const PROBE = { list:'pW-N4rLfrZcXMscDWJ1kUw', boss:'z8B1c-Pt4QmhAPVkB_eN3g', job:'Rrq5HCsDsEf_o8xyIx_dFA',
+                worker:'GhhnfyM2GYMG7Cjl-1gaNQ', send:'N4xvgQX-' };
+/* A task at the text limit that compresses about as badly as real Latin text
+   can: fixed, so the same name always gets the same answer. */
+const PROBE_TASK = (function(){
+  const abc = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ';
+  let x = 2463534242, out = '';
+  while(out.length < EGSCrew.LIMITS.text){ x ^= x<<13; x >>>= 0; x ^= x>>>17; x ^= x<<5; x >>>= 0; out += abc[x % abc.length]; }
+  return out.replace(/^ | $/g,'x');
+})();
+function probeList(n, text, bossId){
+  return { f:EGSCrew.FORMAT, v:EGSCrew.VERSION, k:'list', listId:PROBE.list, issuedAt:1790000000,
+    sendId:PROBE.send, part:1, parts:1,
+    boss:{ id:bossId||PROBE.boss, name:n.boss }, job:{ id:PROBE.job, name:n.job }, day:'2026-09-28',
+    mode:'private', workers:[{ id:PROBE.worker, name:n.worker }],
+    tasks:[{ id:'1', worker:PROBE.worker, text:text, order:1, editedAt:1790000000, gone:null }] };
+}
+/* The component is the only judge of what a valid name or id is. */
+function bossValid(id, name){
+  return EGSCrew.validate(probeList({boss:name,job:'A',worker:'A'}, 'A', id), 'list');
+}
+function nameProblem(v){
+  const d = v.detail || '';
+  if(d.indexOf('too long')>=0) return 'A name can be up to '+EGSCrew.LIMITS.name+' characters.';
+  if(d.indexOf('markup')>=0) return 'A name can’t contain markup like <b>.';
+  if(d.indexOf('forbidden')>=0) return 'A name can’t contain line breaks or control characters.';
+  return v.reason || 'That name doesn’t check out.';
+}
+function nameStandIns(name){
+  const c = Array.from(name);
+  const rev = c.slice().reverse().join('');
+  const mix = c.filter((_,i)=>i%2).concat(c.filter((_,i)=>!(i%2))).join('');
+  return { job:rev.trim()?rev:name, worker:mix.trim()?mix:name };
+}
+async function nameCheck(raw, others){
+  const name = String(raw==null?'':raw).trim();
+  if(!name) return { level:'empty', name:name };
+  const v = bossValid(null, name);
+  if(!v.ok) return { level:'bad', name:name, msg:nameProblem(v) };
+  const alt = nameStandIns(name);
+  let n = { boss:name, job:(others&&others.job)||alt.job, worker:(others&&others.worker)||alt.worker };
+  let full = await EGSCrew.measure(probeList(n, PROBE_TASK));
+  if(!full.ok){ n = { boss:name, job:name, worker:name }; full = await EGSCrew.measure(probeList(n, PROBE_TASK)); }
+  if(full.ok && full.fits) return { level:'ok', name:name };
+  const bare = await EGSCrew.measure(probeList(n, 'A'));
+  if(bare.ok && bare.fits) return { level:'tight', name:name,
+    msg:'A name this long takes up a lot of a link. If your job and crew names run about as long, a full-length task won’t fit in one text, and I’ll have to ask you to shorten it when you send. A shorter name avoids that.' };
+  return { level:'none', name:name,
+    msg:'A name this long leaves no room in a link. With job and crew names about as long, not even a short task would fit, so I couldn’t send a list at all. A shorter name fixes that.' };
 }
 
-function copyText(ta, btn){
-  var say = function(ok){
-    btn.textContent = ok ? 'Copied' : 'Couldn’t copy — select it by hand';
-    setTimeout(function(){ btn.textContent = 'Copy'; }, 2500);
-  };
-  var byHand = function(){
-    try { ta.focus(); ta.select(); ta.setSelectionRange(0, ta.value.length); return document.execCommand('copy'); }
-    catch(e){ return false; }
-  };
-  if(navigator.clipboard && navigator.clipboard.writeText)
-    navigator.clipboard.writeText(ta.value).then(function(){ say(true); }, function(){ say(byHand()); });
-  else say(byHand());
+/* ============================================================
+   EGS-STD:schema — the stored shape carries a number, and it is READ.
+   ============================================================
+   Two version systems, named apart everywhere they appear:
+
+     * PRO_SCHEMA_VERSION — the shape of what is IN localStorage on THIS
+       phone. Written into settings by an ordinary save, read here at load
+       and again at every restore, climbed by the ladder below.
+     * BACKUP_VERSION — the shape of an EXPORTED .json. It describes the
+       file, never the phone.
+
+   They are never compared and never assigned across. */
+const PRO_SCHEMA_VERSION = 1;
+
+/* The ladder — the registration point. The key is the version being migrated
+   TO, and the function takes the stored shape from key-1 up to key, in
+   memory, in place. A rung must be safe to run twice. Every future change to
+   what this app writes into localStorage MUST add a rung here.
+
+   A rung runs in memory because nothing about startup may write. So a rung
+   that changed a store names it in proSchemaDirty, and the same ordinary
+   save that stamps the number writes that store down first. `settings` is
+   never named: saveSettings IS the save doing the flushing.
+
+   Version 1 is the first shape, so there are no rungs yet. The next one
+   looks like:
+     2: function(){ roster.forEach(function(w){ ... }); proSchemaDirty.add('roster'); } */
+const PRO_MIGRATIONS = {};
+const proSchemaDirty = new Set();
+
+/* Absent means version 1. Anything that is not a sane number reads the same
+   way: the conservative answer, never a guess upward. */
+function proSchemaOf(o){
+  const v = o && o.schemaVersion;
+  return (typeof v==='number' && isFinite(v) && v>=1) ? Math.floor(v) : 1;
+}
+/* proSchemaReached is what the stamp will write: the version the data is
+   actually IN, not the one this build hopes for. A rung that throws leaves
+   the shape half-done, and stamping that "current" would hide the damage. */
+let proSchemaReached = 1;
+let schemaFromFuture = false;
+function proApplySchema(from){
+  schemaFromFuture = from > PRO_SCHEMA_VERSION;
+  proSchemaReached = from;
+  /* Newer than this build understands. Nothing is migrated, converted or
+     written; the app shows a gate and waits for the update. */
+  if(schemaFromFuture) return;
+  for(let v=from+1; v<=PRO_SCHEMA_VERSION; v++){
+    try{ const rung = PRO_MIGRATIONS[v]; if(rung) rung(); proSchemaReached = v; }
+    catch(e){ console.warn('Notebuilt Pro: migration to schema v'+v+' did not complete', e); break; }
+  }
 }
 
-// One card: a Generate button, then the link, its exact count, Copy and Open here.
-// build() → { ok:true, link, tail, note } or a refusal { ok:false, reason, code, detail }.
-function card(host, id, title, build){
-  var box = el('div', 'gen');
-  box.appendChild(el('h3', null, title));
-  var go = el('button', 'primary', 'Generate'); go.type = 'button'; go.id = 'gen-' + id;
-  box.appendChild(go);
-  var out = el('div'); out.hidden = true; out.id = 'out-' + id;
-  var ta = el('textarea'); ta.readOnly = true; ta.id = 'link-' + id; ta.setAttribute('aria-label', title + ' link');
-  var count = el('p'), note = el('p', 'dim');
-  var row = el('div', 'row');
-  var copy = el('button', null, 'Copy'); copy.type = 'button'; copy.id = 'copy-' + id;
-  var open = el('a', 'btn', 'Open here'); open.id = 'open-' + id;
-  row.appendChild(copy); row.appendChild(open);
-  out.appendChild(ta); out.appendChild(count); out.appendChild(note); out.appendChild(row);
-  box.appendChild(out);
-  host.appendChild(box);
-
-  copy.onclick = function(){ copyText(ta, copy); };
-  go.onclick = async function(){
-    go.disabled = true;
-    var r;
-    try { r = await build(); }
-    catch(err){ r = { ok:false, reason:'Couldn’t build this link in this browser.', code:'error', detail:String(err && err.message || err) }; }
-    go.disabled = false;
-    out.hidden = false;
-    if(!r.ok){
-      ta.hidden = true; row.hidden = true;
-      count.className = 'bad'; count.textContent = r.reason;
-      note.textContent = '(' + r.code + (r.detail ? ': ' + r.detail : '') + ')';
-      return;
+/* ---------- load and save ----------
+   Every write copies what is there to <key>__bak first, and a load that
+   finds the main copy missing or damaged heals from that copy. A key whose
+   main copy AND backup are both unreadable is never written over: the
+   damaged original is the only evidence left, and the damaged gate says so. */
+const unreadable = new Set();
+function parse(raw){ if(raw==null) return undefined; try{ return JSON.parse(raw); }catch(e){ return undefined; } }
+function loadStore(k, ok, fallback){
+  const raw = lsGet(k);
+  if(raw!=null){ const v = parse(raw); if(v!==undefined && ok(v)) return v; }
+  const b = parse(lsGet(k+'__bak'));
+  if(b!==undefined && ok(b)) return b;
+  if(raw!=null) unreadable.add(k);
+  return fallback();
+}
+function settingsOk(v){
+  if(!isObj(v)) return false;
+  if(proSchemaOf(v) > PRO_SCHEMA_VERSION) return true;       /* not this build's to judge */
+  if(v.boss===undefined) return true;
+  return isObj(v.boss) && typeof v.boss.id==='string' && typeof v.boss.name==='string'
+      && bossValid(v.boss.id, v.boss.name).ok;
+}
+function hasIdentity(o){ return !!(isObj(o) && isObj(o.boss) && typeof o.boss.id==='string' && o.boss.id); }
+function saveStore(k, value, opts){
+  opts = opts || {};
+  if(unreadable.has(k) && !opts.replace) return false;
+  try{
+    const current = localStorage.getItem(k);
+    /* Never write nothing over something: a settings object with no ID must
+       not replace one that has an ID unless a restore or a confirmed fresh
+       start says so. A lost ID breaks resends of every list already sent. */
+    if(k===K.settings && current!=null && !opts.replace && hasIdentity(parse(current)) && !hasIdentity(value)){
+      console.warn('Notebuilt Pro: refused to write settings with no ID over settings that have one');
+      return false;
     }
-    ta.hidden = false; row.hidden = false;
-    ta.value = r.link;
-    // Open on THIS page, wherever it is served from; the link text stays the real address.
-    open.href = location.pathname + r.link.slice(BASE.length);
-    count.className = '';
-    count.textContent = '';
-    count.appendChild(el('span', 'count', r.link.length + ' characters'));
-    count.appendChild(document.createTextNode(r.tail));
-    note.textContent = r.note;
-  };
+    if(current!=null) localStorage.setItem(k+'__bak', current);   /* backup before any write (Tier 1) */
+    localStorage.setItem(k, JSON.stringify(value));
+    unreadable.delete(k);
+    return true;
+  }catch(e){ console.warn('Notebuilt Pro: save failed', e); return false; }
 }
 
-GENS.forEach(function(g){
-  card($('gens'), g.id, g.title, async function(){
-    var e = await C.encode(fixture(g.id));
-    if(!e.ok) return e;
-    return { ok:true, link:testLink(g.key, e.value),
-             tail: worstCase ? ' · worst-case text' : ' · realistic text',
-             note: 'The real link would be ' + C.linkFor(g.link, e.value).length + ' characters (' + e.bytes +
-                   ' B of JSON). This one adds the ' + HEAD_LEN + '-character self-check header' +
-                   (g.link === 'list' ? ' and points at pro.notebuilt.ca instead of notebuilt.ca.' : '.') };
-  });
-});
+let settings = loadStore(K.settings, settingsOk, ()=>({}));
+let roster = loadStore(K.roster, Array.isArray, ()=>[]);
+let jobs = loadStore(K.jobs, Array.isArray, ()=>[]);
+const persist = { roster:()=>saveStore(K.roster, roster), jobs:()=>saveStore(K.jobs, jobs) };
+/* Read at load. It migrates in memory only; the number waits for the next
+   ordinary save to be stamped. */
+proApplySchema(proSchemaOf(settings));
 
-// Fixed-size links: a real private slice (10 tasks, realistic text), padded to the exact length.
-SIZES.forEach(function(n){
-  card($('fixed'), 'fix' + n, n + ' characters', async function(){
-    var e = await C.encode(fixture('slice', true));
-    if(!e.ok) return e;
-    var link = paddedLink('crew', e.value, n);
-    if(!link || link.length !== n) return { ok:false, reason:'Couldn’t make a link of exactly ' + n + ' characters.', code:'size', detail:'payload is ' + e.value.length };
-    return { ok:true, link:link, tail:' exactly',
-             note: 'A real private slice (' + e.value.length + '-character payload) plus ' +
-                   (n - (BASE.length + 6 + HEAD_LEN + 1 + PLEN_LEN + e.value.length)) + ' characters of padding.' };
-  });
-});
-
-function setText(w){
-  worstCase = w;
-  $('text-real').setAttribute('aria-pressed', String(!w));
-  $('text-worst').setAttribute('aria-pressed', String(w));
+function saveSettings(opts){
+  if(schemaFromFuture) return false;            /* never write a shape this build does not understand */
+  /* Whatever a rung changed in memory is written BEFORE the number that
+     describes it. If one of those writes fails the stamp is held back and
+     this save does nothing: a number claiming v2 over data still shaped v1
+     turns a retryable failure into a rung skipped forever. */
+  if(proSchemaDirty.size){
+    for(const name of proSchemaDirty){
+      if(name!=='settings' && persist[name] && !persist[name]()){
+        console.warn('Notebuilt Pro: migrated data would not persist, so the schema number is held back');
+        return false;
+      }
+    }
+    proSchemaDirty.clear();
+  }
+  /* THE STAMP — here and nowhere else. This function is only ever reached
+     from something a person did, which is what keeps the number out of
+     startup. The number goes first and the rest follows in a fixed order, so
+     the same data always serialises to the same bytes. */
+  const out = { schemaVersion:proSchemaReached };
+  Object.keys(settings).forEach(k=>{ if(k!=='schemaVersion') out[k] = settings[k]; });
+  if(!saveStore(K.settings, out, opts)) return false;
+  settings = out;
+  try{ if(localStorage.getItem(HARNESS_KEY)!=null) localStorage.removeItem(HARNESS_KEY); }catch(e){}
+  return true;
 }
-$('text-real').onclick = function(){ setText(false); };
-$('text-worst').onclick = function(){ setText(true); };
 
-// ---- cold open --------------------------------------------------------------------
+/* ---------- IndexedDB: opened only when something needs it, never at startup ---------- */
+function idbOpen(){
+  return new Promise((resolve, reject)=>{
+    let req;
+    try{ req = indexedDB.open(IDB_NAME, IDB_VERSION); }catch(e){ reject(e); return; }
+    /* The store ladder. Each step runs once, for a database older than it. */
+    req.onupgradeneeded = function(ev){
+      const db = req.result;
+      if(ev.oldVersion < 1){
+        db.createObjectStore('lists', { keyPath:'listId' });
+        db.createObjectStore('reports', { keyPath:'listId' });
+      }
+    };
+    req.onsuccess = ()=>resolve(req.result);
+    req.onerror = ()=>reject(req.error);
+    req.onblocked = ()=>reject(new Error('blocked'));
+  });
+}
+async function idbDump(){
+  const db = await idbOpen();
+  try{
+    const out = {};
+    for(const name of IDB_STORES){
+      out[name] = await new Promise((resolve, reject)=>{
+        const r = db.transaction(name,'readonly').objectStore(name).getAll();
+        r.onsuccess = ()=>resolve(r.result); r.onerror = ()=>reject(r.error);
+      });
+    }
+    return out;
+  } finally { db.close(); }
+}
+async function idbReplace(crew){
+  const db = await idbOpen();
+  try{
+    await new Promise((resolve, reject)=>{
+      const tx = db.transaction(IDB_STORES,'readwrite');
+      IDB_STORES.forEach(name=>{ const st = tx.objectStore(name); st.clear(); (crew[name]||[]).forEach(rec=>st.put(rec)); });
+      tx.oncomplete = ()=>resolve(); tx.onerror = ()=>reject(tx.error); tx.onabort = ()=>reject(tx.error);
+    });
+  } finally { db.close(); }
+}
 
-$('ver').textContent = 'Temporary test page · ' + (window.EGS_VERSION || 'dev build');
-$('ua').textContent = navigator.userAgent;
-showMarker();
-showArrival();
-window.addEventListener('hashchange', onHashChange);
+/* ============================================================
+   EGS-STD:themes — day, night, and follow-the-phone
+   ============================================================
+   The <head> script did the first frame. This half is the toggle and the
+   status bar. themeMode() is a pure read; the only writer is setTheme, and
+   only a tap reaches it. */
+function themeMode(){ const m = lsGet(DEVICE.theme); return (m==='light'||m==='dark') ? m : 'system'; }
+const THEME_LABEL = { light:'Day', dark:'Night', system:'Auto' };
+function themeIsDark(){
+  const m = themeMode();
+  if(m!=='system') return m==='dark';
+  return !(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches);
+}
+function applyTheme(){
+  document.documentElement.setAttribute('data-theme', themeMode());
+  const bar = window.NP_THEME_BAR || { dark:'#15181D', light:'#F6F3EC' };
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if(meta) meta.setAttribute('content', themeIsDark() ? bar.dark : bar.light);
+}
+function setTheme(mode){
+  if(mode!=='light' && mode!=='dark') mode = 'system';
+  lsSet(DEVICE.theme, mode); applyTheme();
+}
+if(window.matchMedia){
+  const mq = window.matchMedia('(prefers-color-scheme: light)');
+  const onSys = ()=>{ if(themeMode()==='system') applyTheme(); };
+  if(mq.addEventListener) mq.addEventListener('change', onSys); else if(mq.addListener) mq.addListener(onSys);
+}
+
+/* ============================================================
+   EGS-STD:infomode — beginner and expert, and the (i) markers
+   ============================================================
+   Its own key, not settings: this describes the PHONE. Absent means ON.
+   Startup reads and never writes; guideApply() sets a DOM attribute, which
+   is not storage. The stylesheet does the hiding. */
+function guideOn(){ return lsGet(DEVICE.guide)!=='off'; }
+function guideApply(){ document.documentElement.setAttribute('data-guide', guideOn()?'on':'off'); }
+function guideSet(on){ lsSet(DEVICE.guide, on?'on':'off'); guideApply(); }
+guideApply();
+function helpMark(key, corner){
+  return '<button class="help-i'+(corner?' help-corner':'')+'" data-help="'+esc(key)+'" aria-label="What is this?">i</button>';
+}
+const HELP_COPY = {
+  name:{ title:'Your name and your ID',
+    body:['This is the name your crew sees on every list you send.',
+          'Behind it is an ID that I make once, the first time you set your name, and never change. Changing your name later keeps the same ID, so lists you’ve already sent still match.',
+          'The ID is part of your backup file. Restoring a backup on a new phone brings the same ID back instead of making a new one.',
+          'It isn’t a login. In this version, whoever holds a link can act on it, so send lists only to the person they’re for.'] },
+  backup:{ title:'Backing up',
+    body:['A backup is one file with everything this app keeps. It goes wherever you put it: your phone’s files, an email to yourself, a drive. I never get a copy.',
+          'Restoring replaces what’s on this phone with what’s in the file, and I ask before doing it.',
+          'If this phone is lost and there’s no backup, your ID is gone with it and lists you’ve already sent can’t be matched again.'] },
+  look:{ title:'Day, Night and Auto',
+    body:['Day is warm paper for bright light. Night is the dark cover. Auto follows your phone’s own setting.',
+          'This is saved on this phone only. It isn’t part of a backup.'] },
+  guide:{ title:'Beginner mode',
+    body:['The small (i) markers explain what things do. Turn Beginner mode off once you know your way around and they all disappear; nothing else changes.',
+          'This is saved on this phone only. It isn’t part of a backup.'] },
+  today:{ title:'What’s here so far',
+    body:['This build holds your name and your permanent ID, keeps them backed up, and is ready for the rest.',
+          'Your crew, your jobs and the day’s lists arrive in the next builds.'] }
+};
+function openHelp(key){
+  const h = HELP_COPY[key]; if(!h) return;
+  sheet('<h2>'+esc(h.title)+'</h2>'+h.body.map(p=>'<p>'+esc(p)+'</p>').join('')
+    +'<button class="btn block" data-action="sheet-close">Got it</button>');
+}
+
+/* ============================================================
+   One back resolver, hash-carried view state (the Sep 27 standard)
+   ============================================================
+   history.state = {np:1, v:view, d:depth, g:guard?, o:overlay?, y:scroll}.
+   The stack is [guard d0, home d1, deeper views, the sheet of the top view].
+   popstate is the ONLY back path: the header arrow is history.back(). Every
+   overlay owns an entry while it is open, so closing one is a natural pop.
+   Every history mutation queues behind an in-flight history.go(). The hash
+   and the remembered view are untrusted input: a view is one of a constant
+   set or it is Home. */
+const NAV_VIEWS = new Set(['home','settings','support','privacy']);
+const NAV_ROOT = 'home';
+const NAV_EXIT_MS = 2000;
+let view = NAV_ROOT;
+let _navBase = 0, _navExpect = 0, _navExpectT = null, _navQ = [], _navExitT = null;
+let _bootReport = false;
+
+function navParseHash(h){
+  if(typeof h!=='string' || h.length>40) return null;
+  const m = /^#\/([a-z]{1,12})$/.exec(h);
+  return (m && NAV_VIEWS.has(m[1])) ? m[1] : null;
+}
+function navHash(v){ return '#/'+v; }
+function navEntry(v,d){ return { np:1, v:v, d:d }; }
+function navState(){ const s = history.state; return (s && s.np===1) ? s : null; }
+function navOp(fn){ if(_navExpect) _navQ.push(fn); else fn(); }
+function navFlush(){ while(_navQ.length && !_navExpect) _navQ.shift()(); }
+function navTraverse(n){
+  if(!n) return;
+  _navExpect++;
+  clearTimeout(_navExpectT);
+  /* history.go() past either end fires no popstate; never wait forever. */
+  _navExpectT = setTimeout(()=>{ _navExpect = 0; navFlush(); }, 1500);
+  history.go(n);
+}
+/* Leave the guard: put the Home entry back above it. */
+function navUnguard(){
+  if(_navExitT){ clearTimeout(_navExitT); _navExitT = null; }
+  const s = navState(); if(!s || !s.g || s.unseeded) return;
+  history.pushState(navEntry(NAV_ROOT,1), '', navHash(NAV_ROOT)); _navBase = 1;
+}
+function rememberView(){ lsSet(DEVICE.view, navHash(view)); }   /* only ever called from a navigation */
+function navShow(name, y){ view = name; render(); window.scrollTo(0, y||0); }
+
+function go(name){
+  if(!NAV_VIEWS.has(name)) name = NAV_ROOT;
+  if(sheetIsOpen()) closeSheet();
+  const y = window.scrollY;
+  navOp(()=>{
+    const s = navState(); if(!s || s.unseeded) return;
+    navUnguard();
+    const s1 = navState();
+    if(name===NAV_ROOT){
+      if(s1.d<=1){ history.replaceState(navEntry(name,1), '', navHash(name)); _navBase = 1; }
+      else { navTraverse(1-s1.d); navOp(()=>{ history.replaceState(navEntry(name,1), '', navHash(name)); _navBase = 1; }); }
+    } else {
+      if(!s1.o) history.replaceState(Object.assign({}, s1, {y:y}), '');
+      history.pushState(navEntry(name, s1.d+1), '', navHash(name)); _navBase = s1.d+1;
+    }
+  });
+  navShow(name, 0); rememberView();
+}
+/* The header arrow. The same path as the phone's back button. */
+function navBack(){
+  navOp(()=>{
+    const s = navState();
+    if(s && !s.g && !s.unseeded && s.d>1) history.back();
+    else go(NAV_ROOT);
+  });
+}
+function navArmExit(){
+  toast('Press back again to exit');
+  clearTimeout(_navExitT);
+  _navExitT = setTimeout(()=>{ _navExitT = null; navOp(navUnguard); }, NAV_EXIT_MS);
+}
+/* A cold stack: seeded once, at the first render past the gates. The parent
+   chain is used ONLY to seed. Back never consults it. */
+function navSeed(){
+  const chain = view===NAV_ROOT ? [NAV_ROOT] : (view==='settings' ? [NAV_ROOT,'settings'] : [NAV_ROOT,'settings',view]);
+  history.replaceState({ np:1, g:1, d:0, v:NAV_ROOT }, '', navHash(NAV_ROOT));
+  chain.forEach((v,i)=>history.pushState(navEntry(v,i+1), '', navHash(v)));
+  _navBase = chain.length;
+}
+/* An entry this app did not write: someone tapped a link into the open app,
+   or edited the hash. Adopt it as an ordinary view entry so back still works,
+   and never leave a payload sitting in the address (spec rule 5). */
+function navForeign(){
+  const isReport = /^#report=/.test(location.hash);
+  if(gate()){
+    history.replaceState({ np:1, g:1, d:0, v:NAV_ROOT, unseeded:1 }, '', navHash(NAV_ROOT));
+    return;
+  }
+  const t = isReport ? NAV_ROOT : (navParseHash(location.hash) || view);
+  if(sheetIsOpen()) hideSheet();
+  _navBase = _navBase+1;
+  history.replaceState(navEntry(t,_navBase), '', navHash(t));
+  navShow(t, 0);
+  if(isReport) reportNotYet();
+}
+/* THE back resolver. */
+function navOnPop(e){
+  if(_navExpect){ _navExpect--; if(!_navExpect){ clearTimeout(_navExpectT); navFlush(); } return; }
+  const s = (e.state && e.state.np===1) ? e.state : null;
+  if(!s){ navForeign(); return; }
+  if(gate()) return;
+  if(sheetIsOpen()) hideSheet();                 /* back closes the sheet; nothing is re-pushed */
+  if(s.o){ navTraverse(-1); return; }            /* forward onto a closed sheet's entry: step off it */
+  if(s.g){
+    /* Onto the guard: stay, say so, and let a second press leave. */
+    history.replaceState({ np:1, g:1, d:0, v:NAV_ROOT }, '', navHash(NAV_ROOT));
+    _navBase = 0;
+    if(view!==NAV_ROOT) navShow(NAV_ROOT, 0);
+    navArmExit();
+    return;
+  }
+  _navBase = s.d;
+  navShow(NAV_VIEWS.has(s.v) ? s.v : NAV_ROOT, s.y);
+  rememberView();
+}
+function navBoot(){
+  window.addEventListener('popstate', navOnPop);
+  _bootReport = /^#report=/.test(location.hash);
+  const s = navState();
+  if(s && !s.unseeded && !gate()){
+    /* A reload in the same session (the update banner's Refresh): the stack
+       below is still this app's. Re-validate what it names. */
+    view = NAV_VIEWS.has(s.v) ? s.v : NAV_ROOT;
+    if(s.o){ _navBase = s.d-1; navTraverse(-1); }
+    else if(s.g){ _navBase = 0; navUnguard(); }
+    else _navBase = s.d;
+    return;
+  }
+  let t = gate() ? null : navParseHash(location.hash);
+  /* The remembered screen is for an ordinary cold open. A report link lands on Home. */
+  if(!t && !gate() && !_bootReport) t = navParseHash(lsGet(DEVICE.view));
+  view = t || NAV_ROOT; _navBase = 0;
+  /* One entry until the first render past the gates seeds the rest. This
+     also swaps a #report= payload out of the address. */
+  history.replaceState({ np:1, g:1, d:0, v:view, unseeded:1 }, '', navHash(view));
+}
+
+/* ---------- sheets ---------- */
+function sheetIsOpen(){ return !!$mr.innerHTML; }
+function hideSheet(){ $mr.innerHTML = ''; }
+function sheet(html){
+  $mr.innerHTML = '<div class="scrim" data-action="sheet-scrim"><div class="sheet" role="dialog" aria-modal="true">'+html+'</div></div>';
+  navOp(()=>{
+    let s = navState(); if(!s || s.unseeded || s.o) return;
+    if(s.g){ navUnguard(); s = navState(); }
+    history.pushState({ np:1, v:view, d:s.d+1, o:'sheet' }, '', navHash(view));
+  });
+}
+function closeSheet(){
+  if(!sheetIsOpen()) return;
+  hideSheet();
+  navOp(()=>{ const s = navState(); if(s && s.o) navTraverse(-1); });
+}
+function reportNotYet(){
+  sheet('<h2>A crew report</h2><p>That link is a report from one of your crew. This build can’t read reports yet, so I didn’t open it and nothing was changed.</p>'
+    +'<p class="muted">Keep the text message. The link will still work once reports are built in.</p>'
+    +'<button class="btn block" data-action="sheet-close">OK</button>');
+}
+
+/* ============================================================
+   Rendering
+   ============================================================ */
+/* EGS-STD:coldopen-version — one source (window.EGS_VERSION), one renderer.
+   It is drawn on every first screen a visitor can land on: first run, both
+   gates, and Home. */
+function versionStamp(){
+  /* The parenthetical SHA names the commit before this build, not this one:
+     a commit cannot embed its own final hash. See egs-deploy.sh. */
+  return '<div class="ver-stamp" title="Commit shown is the one before this build.">'+esc(window.EGS_VERSION||'dev build')+'</div>';
+}
+function secHead(label, helpKey){
+  return '<div class="sec-head"><span class="label">'+esc(label)+'</span>'+(helpKey?helpMark(helpKey):'')+'<span class="rule"></span></div>';
+}
+/* Which gate owns the screen, if any. A gate is not a view: it has no history
+   and nothing renders behind it. */
+function gate(){
+  if(schemaFromFuture) return 'future';
+  if(unreadable.has(K.settings)) return 'damaged';
+  if(!hasIdentity(settings)) return 'setup';
+  return null;
+}
+function restoreLabel(text){
+  return '<label class="btn block">'+ico('upload')+' '+esc(text)+'<input type="file" accept="application/json,.json" hidden data-import></label>';
+}
+function renderGate(g){
+  const head = markHtml('lg')+'<h1>'+esc(APP_NAME)+'</h1>';
+  if(g==='future'){
+    return '<div class="setup">'+head
+      +'<p class="lede">This phone’s data was saved by a newer version of '+esc(APP_NAME)+' than the one that just opened.</p>'
+      +'<div class="card prose" style="margin-top:16px">I’ve left everything exactly as it was and changed nothing. Close the app fully and open it again, twice, so the newer version loads.</div>'
+      +versionStamp()+'</div>';
+  }
+  if(g==='damaged'){
+    return '<div class="setup">'+head
+      +'<p class="lede">I can’t read the name and ID saved on this phone.</p>'
+      +'<div class="card prose" style="margin-top:16px">Restoring a backup brings them back, with the same ID. Starting fresh makes a <b>new</b> ID, and lists you’ve already sent won’t match it.</div>'
+      +restoreLabel('Restore from a backup')
+      +'<button class="btn danger block" data-action="start-fresh">Start fresh</button>'
+      +versionStamp()+'</div>';
+  }
+  return '<div class="setup">'+head
+    +'<p class="lede">Task lists for your crew, sent by text. Nothing leaves this phone unless you send it.</p>'
+    +secHead('Your name','name')
+    +'<input class="input" id="boss-name" data-name-input type="text" autocomplete="name" autocapitalize="words" enterkeyhint="done" placeholder="Your name" aria-label="Your name">'
+    +'<div class="field-msg" id="name-msg" aria-live="polite"></div>'
+    +'<button class="btn primary block" data-action="setup-save">Continue</button>'
+    +'<p class="fine">Your crew sees this name on every list you send. You can change it later in Settings.</p>'
+    +restoreLabel('I have a backup')
+    +versionStamp()+'</div>';
+}
+function renderHome(){
+  return '<div class="topbar">'+markHtml('sm')
+    +'<div class="grow"><span class="eyebrow">'+esc(APP_NAME)+'</span><h1>Today</h1></div>'
+    /* EGS-STD:share-v2 — the landing-header share icon. Same handler as the Support page's block. */
+    +'<button class="icon-btn" data-share-app aria-label="Share '+esc(APP_NAME)+'">'+EGS_SHARE_GLYPH+'</button>'
+    +'<button class="icon-btn" data-go="settings" aria-label="Settings">'+I.gear+'</button>'
+    +'</div><div class="wrap">'
+    +secHead('You','name')
+    +'<div class="card"><div style="font-family:var(--serif);font-size:19px">'+esc(settings.boss.name)+'</div>'
+    +'<div class="sub" style="margin-top:4px">Your name and permanent ID are set on this phone.</div></div>'
+    +secHead('Lists','today')
+    +'<div class="card prose">Nothing to send yet. Your crew, your jobs and the day’s lists arrive in the next builds.</div>'
+    +versionStamp()+'</div>';
+}
+function topbar(title){
+  return '<div class="topbar"><button class="icon-btn" data-back aria-label="Back">'+I.back+'</button>'
+    +'<div class="grow"><span class="eyebrow">'+esc(APP_NAME)+'</span><h1>'+esc(title)+'</h1></div></div>';
+}
+function renderSettings(){
+  const mode = themeMode();
+  return topbar('Settings')+'<div class="wrap">'
+    +secHead('Your name','name')
+    +'<div class="list"><button data-action="edit-name"><span class="grow"><span id="set-name">'+esc(settings.boss.name)+'</span>'
+    +'<br><span class="sub">Tap to change. Your ID stays the same.</span></span><span class="chev">'+I.chevronR+'</span></button></div>'
+    +'<div class="field-msg warn" id="set-name-msg"></div>'
+    +secHead('Look','look')
+    +'<div class="seg">'+['light','dark','system'].map(m=>'<button class="'+(mode===m?'on':'')+'" data-action="theme" data-mode="'+m+'">'+THEME_LABEL[m]+'</button>').join('')+'</div>'
+    +secHead('Help','guide')
+    +'<div class="list"><div><span class="grow">Beginner mode<br><span class="sub">Show the (i) markers.</span></span>'
+    +'<button class="switch" role="switch" aria-checked="'+(guideOn()?'true':'false')+'" aria-label="Beginner mode" data-action="guide"></button></div></div>'
+    +secHead('This app')
+    +'<div class="list">'
+    +'<button data-go="support"><span class="grow">Support &amp; Backup<br><span class="sub">Save a backup file, restore one, and how EGS works.</span></span><span class="chev">'+I.chevronR+'</span></button>'
+    +'<button data-go="privacy"><span class="grow">Privacy<br><span class="sub">What I collect (nothing) and where your data lives.</span></span><span class="chev">'+I.chevronR+'</span></button>'
+    +'</div>'
+    /* EGS-STD:apps-directory */
+    +secHead('More EGS apps')
+    +'<div class="list">'+EGS_APPS.map(a=>a.url
+      ? '<a href="'+esc(a.url)+'" target="_blank" rel="noopener"><span class="grow">'+esc(a.name)+'<br><span class="sub">'+esc(a.line)+'</span></span><span class="chev">'+I.chevronR+'</span></a>'
+      : '<div><span class="grow">'+esc(a.name)+'<br><span class="sub">'+esc(a.line)+' Coming soon.</span></span></div>').join('')+'</div>'
+    +versionStamp()+'</div>';
+}
+
+/* EGS-STD:privacy-page — self-contained, offline, the whole-truth pattern. */
+function renderPrivacy(){
+  const card = html => '<div class="card prose">'+html+'</div>';
+  return topbar('Privacy')+'<div class="wrap">'
+    +secHead('What I collect')
+    +card('Nothing. No account, no sign-up, no email. I don’t know who you are or who is on your crew, and I don’t track what you do in this app.')
+    +secHead('Where your data lives')
+    +card('On this phone only: your name, your ID and, as they arrive, your crew, jobs and lists. I never receive a copy. There’s no server for it to go to.')
+    +secHead('When this app touches the internet')
+    +card('To load the app itself from GitHub Pages. GitHub sees what any web server sees, such as your IP address and browser type, and none of your data goes with that request. Offline, the app runs from its own copy on this phone.<br><br>'
+      +'<b>Lists and reports travel in your own text messages.</b> A list is a link, and the list itself sits in the part of the link after the <span class="mono">#</span>. Browsers never send that part to any server, so GitHub never sees crew data. A list or a report is exactly as private as the text message carrying it.<br><br>'
+      +'<b>Links you tap.</b> The More EGS apps links and any payment link open in your browser like any other link.<br><br>'
+      +'That’s the whole list. No analytics, no background calls, no hidden pings.')
+    +secHead('Your data, your control')
+    +card('Save a full backup any time. It’s a plain file you keep, not something on a server of mine. Restore it whenever you like. Clearing this site’s data in your browser erases everything here, so save a backup first.')
+    +secHead('How EGS makes money')
+    +card('Not from your data, because I never have it. '+esc(APP_NAME)+' is free while it’s being tried out on real jobs. When it gets a price, it will be a one-time price. No ads, ever, and no subscription.')
+    +'<div class="card tap row" data-go="support"><div class="grow"><div>Support EGS &amp; back up your data</div><div class="sub">Payment options, export and restore, and how EGS works.</div></div><span class="chev">'+I.chevronR+'</span></div>'
+    +'<div class="card" style="margin-top:6px;text-align:center;font-family:var(--mono);font-size:11px;letter-spacing:.05em;color:var(--paper-faint)">Enlightened Global Solutions · Built in Canada<br>Read the code · check for yourself</div>'
+    +versionStamp()+'</div>';
+}
+
+/* ---------- Support & Backup: the app-specific half ---------- */
+function payLink(url, label, soon){
+  return url
+    ? '<a class="btn primary block" href="'+esc(url)+'" target="_blank" rel="noopener">'+esc(label)+'</a>'
+    : '<div class="card prose">'+esc(soon)+' isn’t set up yet. Interac works today.</div>';
+}
+function paymentDetailHtml(tab){
+  if(tab==='interac'){
+    return '<div class="card"><div style="font-weight:600;margin-bottom:10px">Interac e-Transfer (Canada)</div>'
+      +'<div class="sub" style="margin-bottom:6px">Send to email</div>'
+      +'<div class="row" style="margin-bottom:10px;flex-wrap:wrap"><b class="grow" style="font-size:14px">'+esc(PAYMENT_CONFIG.interacEmail)+'</b>'
+      +'<button class="btn sm" data-copy="'+esc(PAYMENT_CONFIG.interacEmail)+'">Copy</button></div>'
+      +'<div class="sub">Message / memo</div><div style="font-size:14px;font-weight:600">'+esc(PAYMENT_CONFIG.interacMemo)+'</div></div>'
+      +'<div class="sub" style="text-align:center;margin-top:10px">Open your Canadian bank app, choose Interac e-Transfer, and send to the email above. 🍁</div>';
+  }
+  if(tab==='btc'){
+    return PAYMENT_CONFIG.btc
+      ? '<div class="card"><div style="font-weight:600;margin-bottom:10px">Bitcoin</div><div class="mono sub" style="word-break:break-all">'+esc(PAYMENT_CONFIG.btc)+'</div>'
+        +'<button class="btn sm block" style="margin-top:10px" data-copy="'+esc(PAYMENT_CONFIG.btc)+'">Copy address</button></div>'
+      : '<div class="card prose">A Bitcoin address isn’t set up yet. Interac works today.</div>';
+  }
+  if(tab==='card') return payLink(PAYMENT_CONFIG.stripe, 'Open secure checkout', 'Card payment');
+  if(tab==='paypal') return payLink(PAYMENT_CONFIG.paypal, 'Donate via PayPal', 'PayPal');
+  if(tab==='wise') return payLink(PAYMENT_CONFIG.wise, 'Send via Wise', 'Wise');
+  return '';
+}
+/* Copy buttons are handled by the one delegated click listener. The EGS core
+   block below still calls this by name, so it stays, and has nothing to do. */
+function bindCopyButtons(scope){}
+async function copyText(text){
+  try{ await navigator.clipboard.writeText(text); toast('Copied'); }
+  catch(e){ toast('Could not copy. Long-press the text to select it instead.'); }
+}
+function payTabsHtml(){
+  return PAYMENT_TABS.map(t=>'<button class="btn sm '+(t.id===supportTab?'primary':'')+'" data-pay-tab="'+t.id+'">'+esc(t.label)+'</button>').join('');
+}
+function lastBackupLine(){
+  const t = Date.parse(lsGet(DEVICE.lastBackup)||'');
+  if(!t) return 'No backup has been saved from this phone yet.';
+  return 'Last backup from this phone: '+new Date(t).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'})+'.';
+}
+/* EGS-STD:support — the view the row describes.  EGS-STD:backup — its export and restore. */
+function renderSupport(){
+  return topbar('Support & Backup')+'<div class="wrap">'
+    +secHead('Back up your data','backup')
+    +'<div class="card prose">'+esc(APP_BACKUP_DESC)+'<br><br><span id="last-backup">'+esc(lastBackupLine())+'</span></div>'
+    +'<div class="row" style="gap:10px;margin:10px 0 10px">'
+    +'<button class="btn primary" style="flex:1" data-action="export">'+ico('download')+' Export</button>'
+    +'<label class="btn" style="flex:1">'+ico('upload')+' Restore<input type="file" accept="application/json,.json" hidden data-import></label>'
+    +'</div>'
+    +'<div class="sub" style="margin:0 0 22px">Restoring replaces what’s on this phone with what’s in the file. I ask first.</div>'
+    +secHead(APP_MONETIZATION.model==='paid'?'Pricing':'Free for now')
+    +'<div class="card prose">'+esc(APP_MONETIZATION.blurb)+'</div>'
+    +egsSupportCoreHtml(payTabsHtml())
+    +versionStamp()+'</div>';
+}
+
+/* ============================================================
+   EGS CORE — SUPPORT SECTION · v2
+   Copy this block verbatim into every new EGS app. Do not edit
+   the copy below — only PAYMENT_CONFIG and SHARE_APP_LINE (both
+   near the top of the file) should ever change, and only to
+   carry that app's real payment links and its own pitch line.
+
+   v2 — adds share-the-app: EGS_SHARE_GLYPH, appShareUrl(),
+        doShareApp(), and the Share section inside
+        egsSupportCoreHtml(). Hosts supply APP_NAME and
+        SHARE_APP_LINE, and may place a second entry point (a
+        header icon) that calls doShareApp() and draws
+        EGS_SHARE_GLYPH — one handler, one glyph, no drift.
+   v1 — every existing unversioned copy: support blurb, privacy
+        row, payment tabs, footer. Roadside, KEPT, Stagger and
+        WFD are all still v1 as of this edit.
+   ============================================================ */
+
+/* Feather "share-2", the glyph WFD uses — same path data, stroked
+   currentColor so it takes the host app's icon colour. */
+const EGS_SHARE_GLYPH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>';
+
+function appShareUrl(){
+  /* the app's own directory URL, never a deep link into any state */
+  return location.origin + location.pathname.replace(/[^/]*$/, '');
+}
+/* The ONE share handler. Every entry point calls this. It can only ever send
+   the public app link: no project, photo, note, setting or vault state is
+   reachable from here, and keeping that true is the point. */
+async function doShareApp(){
+  const url=appShareUrl();
+  if(navigator.share){
+    try{
+      await navigator.share({ title:APP_NAME, text:SHARE_APP_LINE, url });
+      return;                                     /* the OS sheet said its piece */
+    }catch(err){
+      if(err && err.name==='AbortError') return;  /* user backed out — say nothing */
+      /* anything else: fall through to the clipboard rather than swallow it */
+    }
+  }
+  try{
+    await navigator.clipboard.writeText(SHARE_APP_LINE+' '+url);
+    toast('Link copied');
+  }catch(e){
+    /* clipboard refused (insecure context, permissions) — show it instead of
+       swallowing it, so there is always a way to get the link out */
+    sheet('<h2>Share '+esc(APP_NAME)+'</h2>'
+      +'<div class="muted" style="font-size:13px;margin-bottom:10px">Copy this and send it on:</div>'
+      +'<div class="card mono" style="font-size:12.5px;word-break:break-all;line-height:1.6">'
+      +esc(SHARE_APP_LINE+' '+url)+'</div>'
+      +'<button class="btn primary block" data-copy="'+esc(SHARE_APP_LINE+' '+url)+'" style="margin-top:10px">Copy</button>');
+    bindCopyButtons($mr);
+  }
+}
+
+function egsSupportCoreHtml(tabs){
+  return `<div class="sec-head"><span class="label">Support EGS</span><span class="rule"></span></div>
+    <div class="card muted" style="font-size:13.5px;line-height:1.6">Enlightened Global Solutions is a one-person, Canadian shop building tools the way I'd want them built \u2014 privacy-first, no subscriptions, no shortcuts. If this app has been useful to you, a contribution below helps keep it that way.</div>
+    <div class="row" data-go="privacy" style="cursor:pointer;margin:6px 0 18px"><span class="muted" style="font-size:13px">\ud83d\udd12 Our privacy promise &amp; how we make money \u2192</span></div>
+
+
+    <div class="sec-head"><span class="label">Share ${esc(APP_NAME)}</span><span class="rule"></span></div>
+    <div class="card muted" style="font-size:13.5px;line-height:1.6">Passing it on is its own kind of support, and it costs nothing. This sends the app's public link and nothing else &mdash; none of your own data goes with it.</div>
+    <button class="btn block" data-share-app style="margin:10px 0 22px;display:flex;align-items:center;justify-content:center;gap:8px"><span style="display:inline-flex;width:18px;height:18px">${EGS_SHARE_GLYPH}</span> Share ${esc(APP_NAME)}</button>
+
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin:4px 0 12px">${tabs}</div>
+    <div id="pay-detail">${paymentDetailHtml(supportTab)}</div>
+
+    <div class="card" style="margin-top:18px;text-align:center;font-family:var(--mono);font-size:11px;letter-spacing:.05em;color:var(--paper-faint)">Built by one person in Canada \u00b7 no shareholders, no ads, ever<br>Contributions are voluntary. Every bit helps keep EGS independent. Thank you.</div>`;
+}
+
+const VIEW_RENDER = { home:renderHome, settings:renderSettings, support:renderSupport, privacy:renderPrivacy };
+function render(){
+  const g = gate();
+  if(g){ $app.innerHTML = renderGate(g); $banners.innerHTML = ''; return; }
+  const s = navState(); if(s && s.unseeded) navSeed();
+  $app.innerHTML = VIEW_RENDER[view]();
+  if(view==='settings') settingsNameNote();
+  renderBanners();
+}
+/* Settings keeps the warning in view for a name that is already saved. */
+function settingsNameNote(){
+  const name = settings.boss.name;
+  nameCheck(name).then(r=>{
+    const el = document.getElementById('set-name-msg');
+    if(el && view==='settings' && settings.boss.name===name) el.textContent = (r.level==='tight'||r.level==='none') ? r.msg : '';
+  }).catch(()=>{});
+}
+
+/* ============================================================
+   Boss identity — first run, and the Settings row
+   ============================================================
+   The ID is minted ONCE, here, by the component, on the tap that saves the
+   first name. Renaming never touches it. A restore replaces it with the
+   file's, which is the same one if the file came from this boss. */
+let _nameSeq = 0;
+function nameMsgEl(input){ return document.getElementById(input.id==='edit-name' ? 'edit-name-msg' : 'name-msg'); }
+function showNameResult(el, r){
+  if(!el) return;
+  el.className = 'field-msg'+(r.level==='bad'?' bad':(r.level==='tight'||r.level==='none')?' warn':'');
+  el.textContent = r.msg || '';
+}
+/* The warning appears while typing, not at save. */
+function onNameInput(input){
+  const seq = ++_nameSeq;
+  nameCheck(input.value).then(r=>{ if(seq===_nameSeq) showNameResult(nameMsgEl(input), r); }).catch(()=>{});
+}
+async function saveName(input){
+  if(!input) return;
+  const seq = ++_nameSeq;
+  const r = await nameCheck(input.value);
+  if(seq!==_nameSeq) return;
+  const el = nameMsgEl(input);
+  if(r.level==='empty'){ showNameResult(el, { level:'bad', msg:'Type your name first.' }); input.focus(); return; }
+  if(r.level==='bad'){ showNameResult(el, r); input.focus(); return; }
+  const before = settings;
+  const first = !hasIdentity(settings);
+  const boss = first ? { id:EGSCrew.newId(), name:r.name } : { id:settings.boss.id, name:r.name };
+  settings = Object.assign({}, settings, { boss:boss });
+  if(!saveSettings()){
+    settings = before;
+    showNameResult(el, { level:'bad', msg:'I couldn’t save that on this phone. Nothing was changed.' });
+    return;
+  }
+  if(first){ view = NAV_ROOT; render(); window.scrollTo(0,0); askPersist(); }
+  else { closeSheet(); render(); toast('Name saved'); }
+}
+function openEditName(){
+  sheet(helpMark('name', true)+'<h2>Your name</h2>'
+    +'<input class="input" id="edit-name" data-name-input type="text" autocomplete="name" autocapitalize="words" enterkeyhint="done" aria-label="Your name" value="'+esc(settings.boss.name)+'">'
+    +'<div class="field-msg" id="edit-name-msg" aria-live="polite"></div>'
+    +'<p class="muted" style="margin-top:10px;font-size:13px">Changing your name keeps your ID, so lists you’ve already sent still match.</p>'
+    +'<button class="btn primary block" data-action="name-save">Save</button>');
+  onNameInput(document.getElementById('edit-name'));
+}
+function startFresh(){
+  /* A delete by another name: it abandons the unreadable name and ID. */
+  if(!confirm('Start fresh? This makes a NEW ID. Lists you’ve already sent won’t match it, and the unreadable data on this phone is replaced when you save your name.')) return;
+  unreadable.delete(K.settings);
+  settings = {}; proApplySchema(1);
+  /* Nothing is written yet. The first save, on the next tap, replaces it. */
+  render();
+}
+
+/* ============================================================
+   EGS-STD:backup — one-tap export, and a restore that trusts nothing
+   ============================================================ */
+const BACKUP_VERSION = 1;
+const BACKUP_MAX_BYTES = 5*1024*1024;
+function todayStr(){ const d = new Date(); const p = n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
+async function buildBackup(){
+  const crew = await idbDump();
+  return { app:APP_ID, kind:'backup', version:BACKUP_VERSION, exportedAt:new Date().toISOString(),
+           appVersion:String(window.EGS_VERSION||'dev'), settings:settings, roster:roster, jobs:jobs, crew:crew };
+}
+async function doExport(){
+  let payload;
+  try{ payload = await buildBackup(); }
+  catch(e){ toast('I couldn’t read everything, so I didn’t make a backup that would be missing some of it.'); return false; }
+  const blob = new Blob([JSON.stringify(payload, null, 1)], { type:'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = APP_ID+'-backup-'+todayStr()+'.json';      /* app-named, always */
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+  lsSet(DEVICE.lastBackup, payload.exportedAt);
+  render(); toast('Backup saved');
+  return true;
+}
+/* A backup file is untrusted input, the same as any payload (spec rule 1):
+   size cap, strict shape, ids and names judged by the component, and the
+   whole file refused on any bad field, before anything is stored or shown.
+   Unknown keys are dropped by never being copied. */
+function readBackup(text){
+  const no = reason=>({ ok:false, reason:reason });
+  if(typeof text!=='string' || text.length>BACKUP_MAX_BYTES) return no('That file is too big to be a '+APP_NAME+' backup.');
+  const o = parse(text);
+  if(!isObj(o) || o.app!==APP_ID || o.kind!=='backup') return no('That file isn’t a '+APP_NAME+' backup.');
+  if(typeof o.version!=='number' || !Number.isInteger(o.version) || o.version<1) return no('That backup doesn’t check out, so I didn’t use any of it.');
+  if(o.version>BACKUP_VERSION) return no('That backup was made by a newer version of '+APP_NAME+'. Update the app, then restore it.');
+  const s = o.settings;
+  if(!isObj(s) || !isObj(s.boss) || typeof s.boss.id!=='string' || typeof s.boss.name!=='string')
+    return no('That backup has no name and ID in it, so I didn’t use any of it.');
+  if(s.schemaVersion!==undefined && !(typeof s.schemaVersion==='number' && Number.isInteger(s.schemaVersion) && s.schemaVersion>=1))
+    return no('That backup doesn’t check out, so I didn’t use any of it.');
+  if(proSchemaOf(s)>PRO_SCHEMA_VERSION) return no('That backup was made by a newer version of '+APP_NAME+'. Update the app, then restore it.');
+  if(!bossValid(s.boss.id, s.boss.name).ok) return no('The name or ID in that backup doesn’t check out, so I didn’t use any of it.');
+  /* Crew, jobs and lists have no shape in this build, so there is nothing to
+     check them against. A file that carries any is refused whole rather
+     than stored unchecked. The build that adds each one adds its check. */
+  if(!Array.isArray(o.roster) || !Array.isArray(o.jobs)) return no('That backup doesn’t check out, so I didn’t use any of it.');
+  let crew = null;
+  if(o.crew!==undefined){
+    if(!isObj(o.crew) || !IDB_STORES.every(n=>Array.isArray(o.crew[n]))) return no('That backup doesn’t check out, so I didn’t use any of it.');
+    crew = {}; IDB_STORES.forEach(n=>{ crew[n] = o.crew[n]; });
+  }
+  if(o.roster.length || o.jobs.length || (crew && IDB_STORES.some(n=>crew[n].length)))
+    return no('That backup holds crew, jobs or lists, which this version can’t check yet, so I didn’t use any of it. Update the app, then restore it.');
+  const when = (typeof o.exportedAt==='string' && o.exportedAt.length<=40 && Date.parse(o.exportedAt)) ? new Date(Date.parse(o.exportedAt)).toISOString() : null;
+  return { ok:true, schema:proSchemaOf(s), boss:{ id:s.boss.id, name:s.boss.name }, crew:crew, exportedAt:when };
+}
+async function doRestore(file){
+  if(!file) return;
+  if(file.size>BACKUP_MAX_BYTES){ restoreRefused('That file is too big to be a '+APP_NAME+' backup.'); return; }
+  let text;
+  try{ text = await file.text(); }catch(e){ restoreRefused('I couldn’t read that file.'); return; }
+  const b = readBackup(text);
+  if(!b.ok){ restoreRefused(b.reason); return; }
+  /* Restore replaces, so it asks first whenever there is anything to replace. */
+  if(hasIdentity(settings) || unreadable.has(K.settings)){
+    const same = hasIdentity(settings) && settings.boss.id===b.boss.id;
+    if(!confirm('Restore this backup? It REPLACES what’s on this phone with what’s in the file ('+b.boss.name+').'
+      +(same?'':' The ID in the file is different from the one on this phone.'))) return;
+  }
+  /* A backup with no crew section leaves this phone's crew data as it is
+     (spec rule 8). One with a section replaces it, before the settings, so a
+     failure here leaves the name and ID untouched. */
+  if(b.crew){
+    try{ await idbReplace(b.crew); }
+    catch(e){ restoreRefused('I couldn’t write to this phone’s storage, so nothing was restored.'); return; }
+  }
+  const before = settings, wasFuture = schemaFromFuture, reached = proSchemaReached;
+  settings = { boss:b.boss };
+  proApplySchema(b.schema);       /* the number is read off the restored data, never carried over */
+  if(!saveSettings({ replace:true })){
+    settings = before; schemaFromFuture = wasFuture; proSchemaReached = reached;
+    restoreRefused('I couldn’t write to this phone’s storage, so nothing was restored.'); return;
+  }
+  if(b.exportedAt) lsSet(DEVICE.lastBackup, b.exportedAt);
+  if(sheetIsOpen()) closeSheet();
+  if(navState() && navState().unseeded){ view = NAV_ROOT; render(); window.scrollTo(0,0); }
+  else go(NAV_ROOT);
+  askPersist();
+  toast('Backup restored');
+}
+function restoreRefused(reason){
+  sheet('<h2>Not restored</h2><p>'+esc(reason)+'</p><p class="muted">Nothing on this phone was changed.</p>'
+    +'<button class="btn block" data-action="sheet-close">OK</button>');
+}
+
+/* ============================================================
+   Banners: install prompt and backup nudge. Never stacked.
+   ============================================================ */
+/* EGS-STD:install-banner — the snooze key is app-prefixed (shared-origin rule). */
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); deferredInstall = e; renderBanners(); });
+window.addEventListener('appinstalled', ()=>{ deferredInstall = null; lsSet(DEVICE.install,'1'); renderBanners(); });
+function isStandalone(){ return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone===true; }
+function isIOS(){ return /iphone|ipad|ipod/i.test(navigator.userAgent); }
+function installBannerWanted(){ return !isStandalone() && !lsGet(DEVICE.install); }
+/* EGS-STD:backup — the nudge. Two dials: it first appears when the last
+   backup is 21+ days old or there has never been one, and dismissing it
+   snoozes it 7 days. Only when there is something to lose. */
+let persistedOk = null;
+function backupNudgeWanted(){
+  if(!hasIdentity(settings)) return false;
+  if(Date.now() < +(lsGet(DEVICE.nudge)||0)) return false;
+  const last = Date.parse(lsGet(DEVICE.lastBackup)||'') || 0;
+  return !last || (Date.now()-last) > 21*86400000 || persistedOk===false;
+}
+/* EGS-STD:schema row 11 — ask the browser to keep this storage. Asked once
+   there is something to keep, never on the first-run screen. */
+function askPersist(){
+  if(!(navigator.storage && navigator.storage.persist)) return;
+  navigator.storage.persist().then(ok=>{ persistedOk = !!ok; renderBanners(); }).catch(()=>{});
+}
+function renderBanners(){
+  if(gate()){ $banners.innerHTML = ''; return; }
+  let h = '';
+  /* Install owns the slot until it is dismissed or the app is installed: it
+     is a one-time ask, and the backup nudge re-offers itself. */
+  if(installBannerWanted()){
+    const body = deferredInstall ? 'Put it on your home screen so it opens like an app and works offline.'
+      : (isIOS() ? 'In Safari, tap Share, then Add to Home Screen.' : 'In your browser’s menu, choose Install app or Add to Home screen.');
+    h = '<div class="banner"><b>Install '+esc(APP_NAME)+'</b>'+esc(body)+'<div class="acts">'
+      +(deferredInstall?'<button class="btn sm primary" data-action="install">Install</button>':'')
+      +'<button class="btn sm" data-action="install-dismiss">Not now</button></div></div>';
+  } else if(backupNudgeWanted()){
+    const never = !Date.parse(lsGet(DEVICE.lastBackup)||'');
+    h = '<div class="banner"><b>'+(never?'No backup yet':'Time for a fresh backup')+'</b>'
+      +'Your name and ID exist only on this phone. A backup file means a lost phone doesn’t mean a new ID.'
+      +'<div class="acts"><button class="btn sm primary" data-action="export">Back up now</button>'
+      +'<button class="btn sm" data-action="nudge-snooze">Later</button></div></div>';
+  }
+  $banners.innerHTML = h;
+}
+
+/* ============================================================
+   Events — one delegated listener each. No inline handlers in markup.
+   ============================================================ */
+document.addEventListener('click', function(ev){
+  const t = ev.target;
+  if(!(t instanceof Element)) return;
+  let el;
+  if((el = t.closest('[data-back]'))){ navBack(); return; }
+  if((el = t.closest('[data-go]'))){ go(el.dataset.go); return; }
+  if((el = t.closest('[data-share-app]'))){ doShareApp(); return; }
+  if((el = t.closest('[data-help]'))){ openHelp(el.dataset.help); return; }
+  if((el = t.closest('[data-copy]'))){ copyText(el.dataset.copy); return; }
+  if((el = t.closest('[data-pay-tab]'))){
+    /* A tab switch patches in place: no re-render, no scroll reset. */
+    supportTab = PAYMENT_TABS.some(p=>p.id===el.dataset.payTab) ? el.dataset.payTab : 'interac';
+    document.querySelectorAll('[data-pay-tab]').forEach(b=>b.classList.toggle('primary', b.dataset.payTab===supportTab));
+    const d = document.getElementById('pay-detail');
+    if(d) d.innerHTML = paymentDetailHtml(supportTab);
+    return;
+  }
+  el = t.closest('[data-action]'); if(!el) return;
+  const act = el.dataset.action;
+  if(act==='sheet-scrim'){ if(t===el) closeSheet(); }
+  else if(act==='sheet-close'){ closeSheet(); }
+  else if(act==='setup-save'){ saveName(document.getElementById('boss-name')); }
+  else if(act==='name-save'){ saveName(document.getElementById('edit-name')); }
+  else if(act==='edit-name'){ openEditName(); }
+  else if(act==='start-fresh'){ startFresh(); }
+  else if(act==='theme'){ setTheme(el.dataset.mode); render(); toast('Look: '+THEME_LABEL[themeMode()]); }
+  else if(act==='guide'){ guideSet(!guideOn()); el.setAttribute('aria-checked', guideOn()?'true':'false'); }
+  else if(act==='export'){ doExport(); }
+  else if(act==='install'){
+    if(deferredInstall){ const p = deferredInstall; deferredInstall = null; p.prompt(); if(p.userChoice) p.userChoice.then(()=>renderBanners()).catch(()=>{}); }
+  }
+  else if(act==='install-dismiss'){ lsSet(DEVICE.install,'1'); renderBanners(); }
+  else if(act==='nudge-snooze'){ lsSet(DEVICE.nudge, String(Date.now()+7*86400000)); renderBanners(); }
+});
+document.addEventListener('input', function(ev){
+  const t = ev.target;
+  if(t instanceof Element && t.matches('[data-name-input]')) onNameInput(t);
+});
+document.addEventListener('keydown', function(ev){
+  const t = ev.target;
+  if(ev.key==='Enter' && t instanceof Element && t.matches('[data-name-input]')){ ev.preventDefault(); saveName(t); }
+});
+document.addEventListener('change', function(ev){
+  const t = ev.target;
+  if(t instanceof Element && t.matches('[data-import]')){
+    const f = t.files && t.files[0];
+    t.value = '';                              /* the same file can be picked again */
+    doRestore(f);
+  }
+});
+
+/* ============================================================
+   Boot. Reads, draws, and writes nothing.
+   ============================================================ */
+navBoot();
+render();
+if(_bootReport && !gate()) reportNotYet();
+if(!gate()) askPersist();
+</script>
+<script>
+/* EGS standard PWA wiring: registers the service worker and offers a refresh
+   when a new version has been deployed. */
+(function(){
+  if(!('serviceWorker' in navigator)) return;
+  /* A first install claims the page too, and that must not reload it out from
+     under someone typing their name: only an UPDATE reloads. */
+  var hadController = !!navigator.serviceWorker.controller;
+  window.addEventListener('load', function(){
+    var reg = null;
+    navigator.serviceWorker.register('./service-worker.js').then(function(r){
+      reg = r;
+      reg.addEventListener('updatefound', function(){
+        var nw = reg.installing; if(!nw) return;
+        nw.addEventListener('statechange', function(){
+          if(nw.state==='installed' && navigator.serviceWorker.controller) egsUpdateBanner();
+        });
+      });
+    }).catch(function(){});
+    var refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function(){
+      if(!hadController){ hadController = true; return; }
+      if(refreshing) return; refreshing = true; location.reload();
+    });
+    /* EGS-STD:sw-update-poll — the browser only re-checks service-worker.js on
+       a page load, so ask on a timer and whenever the app comes back to the
+       front. reg.update() is a cheap no-op when nothing changed. */
+    var SW_UPDATE_POLL_MS = 20*60*1000;
+    function checkForUpdate(){ if(reg && document.visibilityState==='visible') reg.update().catch(function(){}); }
+    setInterval(checkForUpdate, SW_UPDATE_POLL_MS);
+    document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') checkForUpdate(); });
+  });
+  function egsUpdateBanner(){
+    if(document.getElementById('egs-update')) return;
+    var b = document.createElement('div'); b.id = 'egs-update';
+    b.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));z-index:99999;background:#D7A94B;color:#231A07;font:600 15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:13px 16px;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.35);display:flex;align-items:center;gap:12px';
+    var s = document.createElement('span'); s.style.flex = '1'; s.textContent = 'A new version is ready.';
+    var btn = document.createElement('button'); btn.textContent = 'Refresh';
+    btn.style.cssText = 'background:#15181D;color:#fff;border:0;border-radius:8px;padding:9px 15px;font:inherit;cursor:pointer';
+    btn.addEventListener('click', function(){ location.reload(); });
+    b.appendChild(s); b.appendChild(btn); document.body.appendChild(b);
+  }
+})();
 </script>
 </body>
 </html>
