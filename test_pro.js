@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Notebuilt Pro — the gate for stages 1 and 2, in a real browser.
+// Notebuilt Pro — the gate for stages 1 to 3, in a real browser.
 // Copyright (c) 2026 Enlightened Global Solutions. All rights reserved.
 //
 // Serves this folder on 127.0.0.1 and drives index.html in real headless
@@ -17,7 +17,7 @@ const { spawn, spawnSync } = require('child_process');
 const http = require('http'), path = require('path'), os = require('os'), fs = require('fs');
 
 const ROOT = __dirname;
-const WEB = 8708;
+const WEB = +process.env.NBPRO_TEST_PORT || 8708;      // the override is for mutation runs side by side, each in its own throwaway profile
 const ORIGIN = 'http://127.0.0.1:' + WEB;
 const URL0 = ORIGIN + '/';
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -82,6 +82,9 @@ srv.on('error', e => { console.log('FAIL cannot serve on 127.0.0.1:' + WEB + ' (
 
 async function run(){
   chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
+    // A fresh profile fetches Chrome's own component updates in the background,
+    // and with downloads pointed at `work` those land there too. Switched off.
+    '--disable-component-update', '--disable-background-networking',
     '--user-data-dir=' + prof, '--no-first-run', 'about:blank'], { stdio:'ignore' });
   let port = null;
   for(let i = 0; i < 100 && !port; i++){ await sleep(100); try { port = fs.readFileSync(path.join(prof, 'DevToolsActivePort'), 'utf8').split('\n')[0]; } catch(e){} }
@@ -108,14 +111,20 @@ async function run(){
   const ev = async expr => { const m = await send('Runtime.evaluate', { expression:expr, returnByValue:true, awaitPromise:true });
     if(m.exceptionDetails) throw new Error((m.exceptionDetails.exception && m.exceptionDetails.exception.description || JSON.stringify(m.exceptionDetails)).slice(0, 400) + '  in  ' + expr.slice(0, 120));
     return m.result.value; };
-  const until = async (expr, ms, what) => { const t = Date.now(); for(;;){ const v = await ev(expr); if(v) return v; if(Date.now() - t > (ms || 8000)) throw new Error('timeout: ' + (what || expr)); await sleep(50); } };
+  const until = async (expr, ms, what) => { const t = Date.now(); for(;;){ const v = await ev(expr); if(v) return v; if(Date.now() - t > (ms || 8000)) throw new Error('timeout: ' + (what || expr) + (errors.length ? '  [last page error: ' + errors[errors.length - 1] + ']' : '')); await sleep(50); } };
   const q = s => JSON.stringify(s);
   const size = (w, h) => send('Emulation.setDeviceMetricsOverride', { width:w, height:h, deviceScaleFactor:1, mobile:true });
   const scheme = v => send('Emulation.setEmulatedMedia', { features:[{ name:'prefers-color-scheme', value:v }] });
   const ready = () => until('document.readyState==="complete" && typeof render==="function" && !!document.querySelector("#app > *")', 10000, 'app painted');
-  const load = async hash => { await send('Page.navigate', { url:'about:blank' }); await send('Page.navigate', { url:URL0 + (hash || '') }); await sleep(80); await ready(); };
+  // One tab runs the whole suite. Chrome keeps at most 50 history entries, and
+  // when it is full it drops entries that were made without a tap first: under
+  // a script, that is every entry this app seeds beneath a cold open. So each
+  // cold open starts from an empty history, as a freshly opened app does.
+  const blank = async () => { await send('Page.navigate', { url:'about:blank' });
+    for(let i = 0; ; i++){ try { await ev('location.href==="about:blank"||(function(){throw new Error("not yet")})()'); await send('Page.resetNavigationHistory'); return; } catch(e){ if(i > 60) throw e; await sleep(25); } } };
+  const load = async hash => { await blank(); await send('Page.navigate', { url:URL0 + (hash || '') }); await sleep(80); await ready(); };
   const reload = async () => { await send('Page.reload'); await sleep(120); await ready(); };
-  const wipe = async () => { await send('Page.navigate', { url:'about:blank' }); await send('Storage.clearDataForOrigin', { origin:ORIGIN, storageTypes:'all' }); };
+  const wipe = async () => { await blank(); await send('Storage.clearDataForOrigin', { origin:ORIGIN, storageTypes:'all' }); };
   const snap = () => ev('JSON.stringify(Object.keys(localStorage).sort().map(function(k){return [k,localStorage.getItem(k)]}))');
   const raw = k => ev('localStorage.getItem(' + q(k) + ')');
   const click = sel => ev('(function(){var e=document.querySelector(' + q(sel) + ');if(!e)throw new Error("no element ' + sel.replace(/"/g, "'") + '");e.click();return true})()');
@@ -128,7 +137,12 @@ async function run(){
   const pickFile = async (sel, file) => { const doc = await send('DOM.getDocument', { depth:0 });
     const n = await send('DOM.querySelector', { nodeId:doc.root.nodeId, selector:sel });
     if(!n.nodeId) throw new Error('no file input ' + sel);
-    await send('DOM.setFileInputFiles', { files:[file], nodeId:n.nodeId }); };
+    try { await send('DOM.setFileInputFiles', { files:[file], nodeId:n.nodeId }); }
+    catch(e){ /* a redraw between the two calls leaves the node id stale: look it up again, once */
+      const d2 = await send('DOM.getDocument', { depth:0 }), n2 = await send('DOM.querySelector', { nodeId:d2.root.nodeId, selector:sel });
+      await send('DOM.setFileInputFiles', { files:[file], nodeId:n2.nodeId }); } };
+  // Backup files sitting in the download folder. Each one a test makes is renamed at once, so this is normally none.
+  const backups = () => fs.readdirSync(work).filter(f => /^notebuilt-pro-backup-/.test(f));
   const tmpFile = (name, body) => { const f = path.join(work, name); fs.writeFileSync(f, body); return f; };
   const download = async before => { const t = Date.now();
     for(;;){ const fresh = fs.readdirSync(work).filter(f => !before.includes(f) && /^notebuilt-pro-backup-.*\.json$/.test(f));
@@ -162,6 +176,42 @@ async function run(){
   const newIds = n => ev('JSON.stringify(Array.from({length:' + n + '},function(){return EGSCrew.newId()}))').then(JSON.parse);
   const rec = (id, name, extraKey, extra, at, archived) => { const r = { id, name }; r[extraKey] = extra || ''; r.archived = !!archived; r.createdAt = at; r.updatedAt = at; return r; };
   const NOW = Math.floor(Date.now() / 1000);
+
+  // ---- stage 3 helpers: lists, the Day screen, the share sheet ----
+  const dump = () => ev('idbDump().then(function(d){return JSON.stringify(d.lists)})').then(JSON.parse);
+  const listsReady = () => until('listsState==="ready"', 8000, 'lists read');
+  const hookShare = () => ev('window.__shares=window.__shares||[],window.__shareFail=null,navigator.share=function(d){if(window.__shareFail==="hang")return new Promise(function(){});if(window.__shareFail){var e=new Error("x");e.name=window.__shareFail;return Promise.reject(e)}window.__shares.push(d);return Promise.resolve()},true');
+  const shares = () => ev('JSON.stringify(window.__shares||[])').then(JSON.parse);
+  const chip = (name, box) => ev('(function(n){var c=Array.prototype.filter.call(document.querySelectorAll(' + q((box || '#day-who') + ' .chip') + '),function(e){return e.textContent===n})[0];if(!c)throw new Error("no chip "+n);c.click();return true})(' + q(name) + ')');
+  const taskCount = () => ev('document.querySelectorAll("#day-body .task").length');
+  const addTask = async (who, words) => { if(who) await chip(who); const n = await taskCount(); await type('#task-new', words); await click('[data-action="task-add"]');
+    await until('document.querySelectorAll("#day-body .task").length===' + (n + 1), 6000, 'task added: ' + words.slice(0, 24)); };
+  const openTask = async words => { await ev('(function(n){var b=Array.prototype.filter.call(document.querySelectorAll("#day-body [data-action=task-edit]"),function(e){return (e.querySelector(".gone-text")||e).textContent===n})[0];if(!b)throw new Error("no task "+n);b.click();return true})(' + q(words) + ')');
+    await until('!!document.getElementById("sheet-root").innerHTML', 3000, 'task sheet'); };
+  // {name: state} for every worker heading on the Day screen, or every card on Send.
+  const dayStates = () => ev('JSON.stringify(Array.prototype.map.call(document.querySelectorAll("#day-body .grp[data-wid]"),function(g){return [g.querySelector(".who").textContent,g.querySelector(".pill").dataset.state]}))').then(a => Object.fromEntries(JSON.parse(a)));
+  const cards = () => ev('JSON.stringify(Array.prototype.map.call(document.querySelectorAll(".send-w"),function(c){return {name:c.querySelector(".who").textContent,state:c.dataset.state,refused:c.dataset.refused||"",pill:c.querySelector(".pill").textContent,parts:Array.prototype.map.call(c.querySelectorAll(".part"),function(p){return {done:p.dataset.done==="1",chars:+p.dataset.chars}}),text:c.textContent,fix:!!c.querySelector("[data-action=send-fix]"),again:!!c.querySelector("[data-action=send-again]")}}))').then(JSON.parse);
+  const card = async name => (await cards()).find(c => c.name === name);
+  const measured = () => until('!!document.querySelector(".send-w") && !/Measuring/.test(document.getElementById("app").textContent)', 20000, 'links measured');
+  const inCard = (name, sel) => ev('(function(n){var c=Array.prototype.filter.call(document.querySelectorAll(".send-w"),function(e){return e.querySelector(".who").textContent===n})[0];var b=c&&c.querySelector(' + q(sel) + ');if(!b)throw new Error("nothing matching ' + sel.replace(/"/g, "'") + ' for "+n);b.click();return true})(' + q(name) + ')');
+  const decode = link => ev('EGSCrew.decode(' + q(link.slice(link.indexOf('#crew=') + 6)) + ',"list").then(function(r){return JSON.stringify(r)})').then(JSON.parse);
+  const linkOf = share => share.text.split('\n')[1];
+  const goHome = async () => { await ev('go("home")'); await until('location.hash==="#/home"', 4000, 'home'); };
+  // Lists put straight into the phone's storage, the way a restore leaves them.
+  const seedLists = arr => ev(`new Promise(function(res,rej){var r=indexedDB.open('notebuiltpro',2);
+    r.onupgradeneeded=function(){var d=r.result;if(!d.objectStoreNames.contains('lists'))d.createObjectStore('lists',{keyPath:'listId'});if(!d.objectStoreNames.contains('reports'))d.createObjectStore('reports',{keyPath:['listId','workerId']})};
+    r.onsuccess=function(){var d=r.result,tx=d.transaction('lists','readwrite');${JSON.stringify(arr)}.forEach(function(x){tx.objectStore('lists').put(x)});tx.oncomplete=function(){d.close();res(true)};tx.onerror=function(){rej(tx.error)}};
+    r.onerror=function(){rej(r.error)}})`);
+  const nodeId = () => require('crypto').randomBytes(16).toString('base64url');
+  // Deterministic text in one script: the same fixtures on every run.
+  let _seed = 0x2545F491;
+  const rnd = () => { _seed |= 0; _seed = _seed + 0x6D2B79F5 | 0; let t = Math.imul(_seed ^ _seed >>> 15, 1 | _seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const scriptText = (from, span, n) => Array.from({ length:n }, () => String.fromCodePoint(from + Math.floor(rnd() * span))).join('');
+  const cyr = n => scriptText(0x430, 32, n), han = n => scriptText(0x4E00, 20000, n), rare = n => scriptText(0x20000, 42719, n);
+
+  const sendAll = async () => { for(let i = 0; i < 80; i++){ const t = await text('#send-next'); if(t === null) break; await click('#send-next');
+      await until('(function(){var b=document.getElementById("send-next");return !b||b.textContent!==' + q(t) + '})()', 6000, 'the queue to move past ' + t); }
+    await until('!!document.getElementById("send-done")', 6000, 'everything sent'); };
 
   await size(320, 568); await scheme('dark');
 
@@ -219,7 +269,7 @@ async function run(){
   const S1 = await raw('notebuiltpro.settings'), s1 = JSON.parse(S1);
   ok(ID_RE.test(s1.boss.id), 'first run minted a permanent ID', S1);
   ok(s1.boss.name === 'Mike', 'and took the name, trimmed', s1.boss.name);
-  ok(s1.schemaVersion === 2 && Object.keys(s1).join() === 'schemaVersion,boss' && Object.keys(s1.boss).join() === 'id,name', 'the save stamped schema 2, in a fixed key order', S1);
+  ok(s1.schemaVersion === 3 && Object.keys(s1).join() === 'schemaVersion,boss' && Object.keys(s1.boss).join() === 'id,name', 'the save stamped schema 3, in a fixed key order', S1);
   ok((await text('.ver-stamp')) === VERSION && /Mike/.test(await text('#app')), 'Home shows the name and the stamp');
   ok((await ev('location.hash')) === '#/home' && (await ev('history.state.d')) === 1, 'history is seeded: guard, then Home');
   ok(!(await overflow()), 'Home: no horizontal scroll at 320px', await overflow());
@@ -248,7 +298,7 @@ async function run(){
   await click('[data-action="edit-name"]'); await type('#edit-name', 'Mike S'); await click('[data-action="name-save"]');
   await until('localStorage.getItem("notebuiltpro.settings").indexOf("Mike S")>0', 5000, 'rename saved');
   const S2 = JSON.parse(await raw('notebuiltpro.settings'));
-  ok(S2.schemaVersion === 2, 'the first ordinary save stamps it');
+  ok(S2.schemaVersion === 3, 'the first ordinary save stamps it');
   ok(S2.boss.id === s1.boss.id && S2.boss.name === 'Mike S', 'renaming keeps the ID', JSON.stringify(S2));
   ok((await raw('notebuiltpro.settings__bak')) === UNSTAMPED, 'the save backed up what was there first');
   ok((await raw('notebuiltpro.selfcheck.marker')) === null, 'the harness key is dropped by that save');
@@ -258,10 +308,10 @@ async function run(){
   const V1 = JSON.stringify({ schemaVersion:1, boss:s1.boss });
   await seed([['notebuiltpro.settings', V1]]);
   await load('#/home'); await sleep(500);
-  ok((await snap()) === JSON.stringify([['notebuiltpro.settings', V1]]) && /Mike/.test(await text('#app')), 'a phone on schema 1 opens as it was, and startup does not move it to schema 2');
+  ok((await snap()) === JSON.stringify([['notebuiltpro.settings', V1]]) && /Mike/.test(await text('#app')), 'a phone on schema 1 opens as it was, and startup does not move it up');
   await click('[data-go="crew"]'); await addRec('Joe');
   { const st = JSON.parse(await raw('notebuiltpro.settings')), ro = await stored('roster');
-    ok(ro.length === 1 && st.schemaVersion === 2 && st.boss.id === s1.boss.id, 'adding the first worker writes the crew and, with it, stamps schema 2', JSON.stringify(st));
+    ok(ro.length === 1 && st.schemaVersion === 3 && st.boss.id === s1.boss.id, 'adding the first worker writes the crew and, with it, stamps schema 3', JSON.stringify(st));
     ok((await raw('notebuiltpro.settings__bak')) === V1, 'and the schema 1 settings are kept as the backup copy'); }
   await seed([['notebuiltpro.settings', JSON.stringify(S2)]]); await load('#/settings'); await sleep(200);
 
@@ -421,7 +471,7 @@ async function run(){
   ok((await text('#home-jobs')) === '2 jobs' && (await text('#home-crew')) === '6 people', 'Home counts both', (await text('#home-jobs')) + ' / ' + (await text('#home-crew')));
   ok(!(await overflow()), 'Home with crew and jobs: no horizontal scroll at 320px', await overflow());
   await shot('07-home-stage2-320');
-  ok(JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 2 && JSON.parse(await snap()).every(p => p[0].indexOf('notebuiltpro.') === 0), 'every key is still notebuiltpro.*');
+  ok(JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 3 && JSON.parse(await snap()).every(p => p[0].indexOf('notebuiltpro.') === 0), 'every key is still notebuiltpro.*');
 
   // A boss rename is now weighed against the real crew and jobs.
   await click('[data-go="settings"]'); await click('[data-action="edit-name"]'); await type('#edit-name', CYR);
@@ -481,8 +531,8 @@ async function run(){
   await load('#/crew'); await sleep(300);
   ok(/can\u2019t read the crew/.test(await text('#app')) && await ev('!window.__z && !document.querySelector("#app img") && !document.querySelector("[data-action=rec-add]")'), 'a stored worker that fails the check is never drawn: Crew says it cannot read the crew');
   ok((await raw('notebuiltpro.roster')) === BADROSTER, 'and leaves it untouched');
-  { const had0 = fs.readdirSync(work); await click('[data-go="support"]'); await click('[data-action="export"]'); await sleep(700);
-    ok(fs.readdirSync(work).length === had0.length && /didn\u2019t make a backup/.test(await text('#toast')), 'export refuses rather than write a backup with the crew missing', await text('#toast')); }
+  { await click('[data-go="support"]'); await click('[data-action="export"]'); await sleep(700);
+    ok(backups().length === 0 && /didn\u2019t make a backup/.test(await text('#toast')), 'export refuses rather than write a backup with the crew missing', (await text('#toast')) + ' | ' + backups().join()); }
   await ev('history.back()'); await until('location.hash==="#/crew"', 4000, 'crew');
   dialogs.seen.length = 0; dialogs.answer = false; await click('[data-action="store-fresh"]'); await sleep(150);
   ok(dialogs.seen.length === 1 && await ev('!!document.querySelector("[data-action=store-fresh]")'), 'Start again asks first, and declining changes nothing');
@@ -563,7 +613,7 @@ async function run(){
     await click('[data-go="settings"]'); await click('[data-go="support"]');
     await pickFile('.wrap input[data-import]', tmpFile('stage1.json', JSON.stringify(old)));
     await until('localStorage.getItem("notebuiltpro.roster")==="[]"', 6000, 'stage 1 backup restored');
-    ok(/Mike, 0 on the crew, 0 jobs/.test(dialogs.seen[0]) && JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 2 && (await raw('notebuiltpro.roster__bak')) === AR, 'a stage 1 backup restores, says it holds no crew, comes up to schema 2, and the replaced crew is kept as the backup copy');
+    ok(/Mike, 0 on the crew, 0 jobs/.test(dialogs.seen[0]) && JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 3 && (await raw('notebuiltpro.roster__bak')) === AR, 'a stage 1 backup restores, says it holds no crew, comes up to schema 3, and the replaced crew is kept as the backup copy');
     await click('[data-go="settings"]'); await click('[data-go="support"]');
     await pickFile('.wrap input[data-import]', path.join(work, 'first.json'));
     await until('localStorage.getItem("notebuiltpro.roster")===' + q(AR), 6000, 'full backup restored again'); }
@@ -622,9 +672,493 @@ async function run(){
     await until('location.hash==="#/home"', 6000, 'restore without a crew section');
     ok((await raw('notebuiltpro.settings')) === A && (await raw('notebuiltpro.roster')) === AR && (await raw('notebuiltpro.jobs')) === AJ, 'a backup with no lists section restores; unknown keys are dropped and a missing address reads as none'); }
 
+  // ---- day ---------------------------------------------------------------------------------
+  section('Day');
+  await setup('Mike');
+  await listsReady();
+  ok(await ev('indexedDB.databases().then(function(d){return d.some(function(x){return x.name==="notebuiltpro"})})'), 'the lists are read once there is a name, and not before');
+  await click('[data-go="crew"]'); await addRec('Joe'); await addRec('Maria'); await addRec('Zed');
+  await goHome(); await click('[data-go="jobs"]'); await addRec('Oak St reno', '12 Oak St'); await goHome();
+  ok(/No lists yet/.test(await text('#home-days')), 'Home says there are no lists yet', await text('#home-days'));
+  const boss3 = JSON.parse(await raw('notebuiltpro.settings')).boss, crew3 = await stored('roster'), job3 = (await stored('jobs'))[0];
+  const wid = n => crew3.find(w => w.name === n).id;
+  const DAYR = '#/day/' + job3.id + '/' + today, SENDR = '#/send/' + job3.id + '/' + today;
+  await click('[data-go="day"]');
+  ok((await ev('location.hash')) === '#/day' && (await ev('document.getElementById("day-date").value')) === today && (await names('#day-jobs')).join() === 'Oak St reno', 'Days opens on today, with the jobs to pick from');
+  ok(!(await overflow()), 'Days: no horizontal scroll at 320px', await overflow());
+  await ev('(function(){var d=document.getElementById("day-date");d.value="2027-03-05";d.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+  await click('#day-jobs [data-action="day-open"]'); await until('location.hash===' + q('#/day/' + job3.id + '/2027-03-05'), 4000, 'the picked day');
+  ok(/Mar 5/.test(await text('.topbar .eyebrow')), 'picking another day opens that day, and the header says which', await text('.topbar .eyebrow'));
+  await ev('history.back()'); await until('location.hash==="#/day"', 4000, 'back to Days');
+  ok((await ev('document.getElementById("day-date").value')) === '2027-03-05', 'and Days remembers the day that was picked');
+  await ev('(function(){var d=document.getElementById("day-date");d.value="";return true})()'); await click('#day-jobs [data-action="day-open"]'); await sleep(200);
+  ok((await ev('location.hash')) === '#/day' && /Pick a day first/.test(await text('#toast')), 'with no day picked, tapping a job goes nowhere and says why');
+  await ev('(function(){var d=document.getElementById("day-date");d.value=' + q(today) + ';d.dispatchEvent(new Event("change",{bubbles:true}));return true})()');
+  await click('#day-jobs [data-action="day-open"]');
+  ok((await ev('location.hash')) === DAYR && (await ev('history.state.d')) === 3 && (await text('.topbar h1')) === 'Oak St reno', 'tapping a job opens that job\u2019s day, as its own history entry', await ev('location.hash'));
+  ok((await dump()).length === 0, 'opening a day writes nothing');
+  await type('#task-new', 'Hang 6 doors'); await click('[data-action="task-add"]');
+  await until('/Tap who/.test(document.getElementById("task-new-msg").textContent)', 3000, 'no worker picked');
+  await chip('Joe');
+  ok((await text('#task-new-msg')) === '' && (await ev('document.getElementById("task-new").value')) === 'Hang 6 doors', 'picking who clears the message and keeps what was typed');
+  await type('#task-new', ''); await click('[data-action="task-add"]');
+  await until('/Type the task/.test(document.getElementById("task-new-msg").textContent)', 3000, 'empty task');
+  await type('#task-new', 'x'.repeat(201));
+  await until('/200 characters\\. This one is 201/.test(document.getElementById("task-new-msg").textContent)', 3000, '201 characters, while typing');
+  await click('[data-action="task-add"]'); await sleep(250);
+  await type('#task-new', 'Fix <b>door'); await click('[data-action="task-add"]');
+  await until('/markup/.test(document.getElementById("task-new-msg").textContent)', 3000, 'markup');
+  ok((await dump()).length === 0 && (await taskCount()) === 0, 'nobody picked, no words, 201 characters and markup are each refused, and nothing is written');
+  await type('#task-new', 'x'.repeat(200)); await sleep(150);
+  ok((await text('#task-new-msg')) === '', 'exactly 200 characters is allowed');
+  await type('#task-new', '');
+  await ev('window.__field=document.getElementById("task-new"),true');
+  await addTask('Joe', 'Hang 6 doors, unit 204'); await addTask(null, 'Case the windows in 204'); await addTask(null, '  Fill and sand trim  ');
+  ok(await ev('document.activeElement===window.__field && window.__field===document.getElementById("task-new") && window.__field.value===""'), 'after Add the field is the same node, still focused and empty, so the keyboard stays up');
+  await addTask('Maria', 'Prime bedroom walls'); await addTask(null, 'Cut in ceilings');
+  let L = (await dump())[0];
+  ok((await dump()).length === 1 && ID_RE.test(L.listId) && Object.keys(L).join() === 'listId,createdAt,updatedAt,boss,job,day,workers,tasks,sent,queue', 'the first task makes one list with a permanent ID, stored in a fixed key order', Object.keys(L).join());
+  ok(L.boss.id === boss3.id && L.boss.name === 'Mike' && L.job.id === job3.id && L.job.name === 'Oak St reno' && L.day === today, 'it carries the boss, the job and the day');
+  ok(L.workers.map(w => w.id).join() === [wid('Joe'), wid('Maria')].sort().join() && L.workers.every(w => Object.keys(w).join() === 'id,name'), 'only people with a task are on it, kept in ID order');
+  ok(L.tasks.map(t => t.id).join() === '1,2,3,4,5' && L.tasks.map(t => t.order).join() === '1,2,3,4,5' && L.tasks.every(t => t.gone === null && Object.keys(t).join() === 'id,worker,text,order,editedAt,gone' && Math.abs(t.editedAt - NOW) < 900), 'tasks get short list-scoped IDs, an order and an edit time', JSON.stringify(L.tasks[0]));
+  ok(L.tasks.slice(0, 3).every(t => t.worker === wid('Joe')) && L.tasks.slice(3).every(t => t.worker === wid('Maria')) && L.tasks[2].text === 'Fill and sand trim', 'each task is assigned to whoever was picked, and the name stays picked between tasks; text is trimmed');
+  ok(JSON.stringify(L.sent) === '{}' && JSON.stringify(L.queue) === '{}', 'nothing is recorded as sent');
+  ok(JSON.stringify(await dayStates()) === JSON.stringify({ Joe:'new', Maria:'new' }), 'the screen groups tasks by worker, sorted by name, each marked not sent', JSON.stringify(await dayStates()));
+  await addTask('Zed', '&lt;i&gt; cut < 8ft & "trim" \'x\'');
+  ok(await ev('(function(){var b=Array.prototype.slice.call(document.querySelectorAll("#day-body .task-text")).pop();return b.textContent===' + q('&lt;i&gt; cut < 8ft & "trim" \'x\'') + ' && b.children.length===0})()'), 'task text is escaped where it is drawn');
+  ok(!(await overflow()), 'Day with tasks: no horizontal scroll at 320px', await overflow());
+  await shot('20-day-dark-320');
+
+  // Reorder.
+  const joeTexts = () => ev('JSON.stringify(Array.prototype.map.call(document.querySelectorAll(' + q('.tasks[data-wid="' + wid('Joe') + '"] .task-text') + '),function(e){return e.textContent}))').then(JSON.parse);
+  ok(await ev('(function(){var t=document.querySelectorAll(' + q('.tasks[data-wid="' + wid('Joe') + '"] .task') + ');return t[0].querySelector("[data-action=task-up]").disabled && !t[0].querySelector("[data-action=task-down]").disabled && t[2].querySelector("[data-action=task-down]").disabled})()'), 'the first task cannot move up and the last cannot move down');
+  await click('.tasks[data-wid="' + wid('Joe') + '"] .task:nth-child(2) [data-action="task-up"]');
+  await until('document.querySelector(' + q('.tasks[data-wid="' + wid('Joe') + '"] .task-text') + ').textContent==="Case the windows in 204"', 4000, 'moved up');
+  { const M = (await dump())[0], t1 = M.tasks.find(t => t.id === '1'), t2 = M.tasks.find(t => t.id === '2');
+    ok(t2.order === 1 && t1.order === 2 && t1.editedAt >= L.tasks[0].editedAt && M.tasks.find(t => t.id === '4').order === 4 && (await joeTexts()).join('|') === 'Case the windows in 204|Hang 6 doors, unit 204|Fill and sand trim', 'moving a task up swaps it with the one above, and only those two change', JSON.stringify(M.tasks.map(t => [t.id, t.order]))); }
+  await click('.tasks[data-wid="' + wid('Joe') + '"] .task:nth-child(1) [data-action="task-down"]');
+  await until('document.querySelector(' + q('.tasks[data-wid="' + wid('Joe') + '"] .task-text') + ').textContent==="Hang 6 doors, unit 204"', 4000, 'moved down');
+  ok(true, 'and moving it down puts it back');
+
+  // Edit and reassign.
+  await openTask('Fill and sand trim'); await type('#task-text', 'Fill, sand and caulk trim'); await click('[data-action="task-save"]'); await closed('task saved');
+  { const M = (await dump())[0], t = M.tasks.find(x => x.id === '3');
+    ok(t.text === 'Fill, sand and caulk trim' && t.worker === wid('Joe') && M.tasks.length === 6, 'changing a task\u2019s words keeps its ID and its owner'); }
+  { const b4 = JSON.stringify(await dump()); await openTask('Cut in ceilings'); await click('[data-action="task-save"]'); await closed();
+    ok(JSON.stringify(await dump()) === b4, 'saving a task with nothing changed writes nothing'); }
+  await openTask('Cut in ceilings'); await chip('Zed', '#task-who-chips'); await click('[data-action="task-save"]'); await closed('reassigned');
+  { const M = (await dump())[0], t = M.tasks.find(x => x.id === '5');
+    ok(t.worker === wid('Zed') && t.gone === null && t.order === 7 && M.tasks.length === 6, 'reassigning with a chip moves the task to that worker, at the end of their list; nothing is removed', JSON.stringify(t)); }
+  await openTask('Cut in ceilings'); await type('#task-text', 'x'.repeat(201)); await click('[data-action="task-save"]');
+  await until('/200 characters/.test(document.getElementById("task-text-msg").textContent)', 3000, 'long edit refused');
+  dialogs.answer = true; await ev('history.back()'); await closed();
+  ok((await dump())[0].tasks.find(x => x.id === '5').text === 'Cut in ceilings', 'a 201-character edit is refused and the task is left as it was');
+
+  // Cancel asks first, removes nothing, and can be undone.
+  await openTask('Prime bedroom walls'); dialogs.seen.length = 0; dialogs.answer = false;
+  await click('[data-action="task-cancel"]'); await sleep(250);
+  ok(dialogs.seen.length === 1 && /Cancel \u201cPrime bedroom walls\u201d\? Nothing is deleted/.test(dialogs.seen[0]) && /hasn\u2019t been sent to Maria yet/.test(dialogs.seen[0]), 'cancelling a task asks first, and says it was never sent', dialogs.seen.join('|'));
+  ok((await dump())[0].tasks.find(x => x.id === '4').gone === null && await ev('!!document.getElementById("task-text")'), 'declining changes nothing');
+  dialogs.answer = true; await click('[data-action="task-cancel"]'); await closed('cancelled');
+  { const M = (await dump())[0], t = M.tasks.find(x => x.id === '4');
+    ok(t.gone === 'cancelled' && t.worker === wid('Maria') && M.tasks.length === 6 && /Prime bedroom walls/.test(await text('#day-gone')) && !('Maria' in (await dayStates())), 'accepting keeps the task and marks it cancelled; it moves under Cancelled', JSON.stringify(t)); }
+  await openTask('Prime bedroom walls'); await click('[data-action="task-restore"]'); await closed('brought back');
+  ok((await dump())[0].tasks.find(x => x.id === '4').gone === null && 'Maria' in (await dayStates()) && await ev('!document.getElementById("day-gone")'), 'and Bring back restores it');
+
+  // Restart, the stack, and typing that would be lost.
+  const DAY1 = JSON.stringify(await dump());
+  await reload(); await listsReady(); await until('document.querySelectorAll("#day-body .task").length===6', 5000, 'tasks after reload');
+  ok((await ev('location.hash')) === DAYR && JSON.stringify(await dump()) === DAY1, 'the day survives a reload, and reopening it writes nothing');
+  await load(); await listsReady(); await until('document.querySelectorAll("#day-body .task").length===6', 5000, 'tasks after a cold open');
+  ok((await ev('location.hash')) === DAYR, 'a cold open comes back to the day it was on');
+  await type('#task-new', 'Half a task'); dialogs.seen.length = 0; dialogs.answer = false;
+  await ev('history.back()'); await sleep(350);
+  ok(dialogs.seen.length === 1 && /Discard the task you typed\? It hasn\u2019t been added\./.test(dialogs.seen[0]) && (await ev('location.hash')) === DAYR && (await ev('document.getElementById("task-new").value')) === 'Half a task' && (await ev('history.state.d')) === 3, 'backing out with a task typed and not added asks first, and No stays put with the words intact', dialogs.seen.join('|') + ' ' + await ev('location.hash'));
+  dialogs.seen.length = 0; await click('[data-action="send-open"]'); await sleep(250);
+  ok(dialogs.seen.length === 1 && (await ev('location.hash')) === DAYR, 'so does leaving by a button');
+  await ev('location.hash="#report=1ZZZZ"'); await sleep(300);
+  ok(/Add or clear the task you typed first/.test(await text('#toast')) && (await ev('location.href')).indexOf('report=') < 0 && (await ev('document.getElementById("task-new").value')) === 'Half a task', 'a report link tapped mid-task is stripped from the address and the words are kept');
+  dialogs.answer = true; dialogs.seen.length = 0; await ev('history.back()'); await sleep(300);
+  ok(dialogs.seen.length === 0 && (await ev('location.hash')) === DAYR && (await ev('document.getElementById("task-new").value')) === 'Half a task', 'back off that stripped link lands on the same day, so nothing is asked and nothing is lost');
+  await ev('history.back()');
+  await until('location.hash==="#/day"', 4000, 'back to Days');
+  ok(JSON.stringify(await dump()) === DAY1, 'Yes leaves, and the half-typed task was never saved');
+  ok((await names('#day-past')).join() === 'Oak St reno' && /6 tasks · 3 not sent/.test(await text('#day-past')), 'Days lists the day so far, with its count and what is not sent', await text('#day-past'));
+  await ev('history.back()'); await until('location.hash==="#/home"', 4000, 'home');
+  ok(/1 day so far/.test(await text('#home-days')) && /Today · 6 tasks/.test(await text('#home-lists')), 'and Home shows today\u2019s list', await text('#home-lists'));
+  await click('#home-lists [data-list]'); await until('location.hash===' + q(DAYR), 4000, 'day from home');
+  await openTask('Cut in ceilings'); await chip('Maria', '#task-who-chips'); dialogs.seen.length = 0; dialogs.answer = false;
+  await ev('history.back()'); await sleep(300);
+  ok(dialogs.seen.length === 1 && /Discard what you typed/.test(dialogs.seen[0]) && await ev('!!document.getElementById("task-text")'), 'picking a different person in the task sheet counts as unsaved typing');
+  dialogs.answer = true; await ev('history.back()'); await closed();
+  await goHome();
+  for(const h of ['#/day/' + nodeId() + '/' + today, '#/day/' + job3.id + '/2026-02-30', '#/day/' + job3.id, '#/send', '#/send/' + job3.id + '/' + today + '/x', '#/crew/' + job3.id + '/' + today]){
+    await load(h); await sleep(150);
+    if((await ev('location.hash')) !== '#/home') ok(false, 'a day route that does not check out falls back to Home', h + ' → ' + await ev('location.hash')); }
+  ok(true, 'a job that is not on this phone, an impossible date, and a malformed route all land on Home');
+
+  // A phone still on the stage 2 shape: schema 2, with a day already on it.
+  { const st = JSON.parse(await raw('notebuiltpro.settings')); st.schemaVersion = 2;
+    await seed([['notebuiltpro.settings', JSON.stringify(st)], ['notebuiltpro.roster', await raw('notebuiltpro.roster')], ['notebuiltpro.jobs', await raw('notebuiltpro.jobs')]]);
+    await load(DAYR); await listsReady(); await until('document.querySelectorAll("#day-body .task").length===6', 5000, 'day on a schema 2 phone'); await sleep(200);
+    ok(JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 2, 'a phone on schema 2 opens its day without being moved up');
+    await addTask('Joe', 'One more');
+    ok(JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 3 && JSON.parse(await raw('notebuiltpro.settings__bak')).schemaVersion === 2, 'the first list write stamps schema 3, after the list is down, and keeps the old settings as the backup copy'); }
+
+  // ---- send ---------------------------------------------------------------------------------
+  section('Send');
+  const REAL = ['Hang 6 doors, unit 204', 'Case the windows in 204 and 206', 'Fill, sand and caulk the trim in the hall', 'Install baseboard in bedrooms 1 and 2', 'Set the vanity in the main bath and shim it level',
+    'Cut in and hang the closet shelving, unit 206', 'Fix the squeak in the stair tread, third from top', 'Swap the back door weatherstrip and adjust the latch', 'Patch the drywall behind the old thermostat', 'Sweep up and haul scrap to the bin before 4'];
+  await setup('Mike'); await listsReady();
+  await click('[data-go="crew"]'); await addRec('Joe'); await addRec('Maria'); await addRec('Zed');
+  await goHome(); await click('[data-go="jobs"]'); await addRec('Oak St reno'); await goHome();
+  const crewS = await stored('roster'), jobS = (await stored('jobs'))[0], bossS = JSON.parse(await raw('notebuiltpro.settings')).boss;
+  const sw = n => crewS.find(w => w.name === n).id;
+  const DAYS = '#/day/' + jobS.id + '/' + today, SENDS = '#/send/' + jobS.id + '/' + today;
+  const one = async () => (await dump()).find(l => l.day === today);
+  const toDay = async () => { await load(DAYS); await listsReady(); await until('!!document.getElementById("day-body")', 4000, 'day'); };
+  const toSend = async () => { await load(SENDS); await listsReady(); await hookShare(); await measured(); };
+  await toDay();
+  for(let i = 0; i < REAL.length; i++) await addTask(i ? null : 'Joe', REAL[i]);
+  await addTask('Maria', 'Prime bedroom walls'); await addTask(null, 'Cut in ceilings');
+  await click('[data-action="send-open"]'); await until('location.hash===' + q(SENDS), 4000, 'send'); await hookShare(); await measured();
+  ok((await ev('history.state.d')) === 4, 'Send is its own history entry above the day');
+  let cs = await cards();
+  ok(cs.map(c => c.name).join() === 'Joe,Maria' && cs.every(c => c.state === 'new' && !c.refused), 'Send lists each worker with something to send, sorted by name');
+  ok(cs[0].parts.length === 1 && cs[0].parts[0].chars <= 700, 'a realistic 10-task list measures as ONE part: ' + cs[0].parts[0].chars + ' characters', JSON.stringify(cs[0].parts));
+  ok((await text('#send-next')) === 'Send Joe\u2019s list', 'the queue starts with the first worker', await text('#send-next'));
+  { const M = await one(); ok(JSON.stringify(M.sent) === '{}' && JSON.stringify(M.queue) === '{}' && (await shares()).length === 0, 'measuring stored nothing and opened no share sheet'); }
+  ok(!(await overflow()), 'Send: no horizontal scroll at 320px', await overflow());
+  await shot('21-send-dark-320');
+  await click('#send-next'); await until('document.querySelector(".send-w").dataset.state==="sent"', 5000, 'Joe sent');
+  let sh = await shares();
+  const JOE1 = linkOf(sh[0]);
+  ok(sh.length === 1 && Object.keys(sh[0]).join() === 'text' && sh[0].text.split('\n')[0] === 'Mike: tasks for Oak St reno, ' + (await ev('dayLabel(' + q(today) + ')')), 'the share sheet gets one line saying whose tasks, for which job and day', sh[0].text.split('\n')[0]);
+  ok(JOE1.indexOf('https://notebuilt.ca/#crew=') === 0 && JOE1.length === cs[0].parts[0].chars && JOE1.length <= 700, 'and the link that was measured, ' + JOE1.length + ' characters');
+  { const d = await decode(JOE1), v = d.value || {};
+    ok(d.ok && v.mode === 'private' && v.workers.length === 1 && v.workers[0].id === sw('Joe') && v.workers[0].name === 'Joe', 'the link decodes as a private list for Joe alone', JSON.stringify(d).slice(0, 200));
+    ok(v.tasks.map(t => t.text).join('|') === REAL.join('|') && v.tasks.every(t => t.worker === sw('Joe') && t.gone === null), 'with his ten tasks, in order');
+    ok(JSON.stringify(v).indexOf('Prime bedroom') < 0 && JSON.stringify(v).indexOf(sw('Maria')) < 0, 'and nothing of Maria\u2019s');
+    ok(v.listId === (await one()).listId && v.boss.id === bossS.id && v.job.id === jobS.id && v.day === today && v.part === 1 && v.parts === 1, 'it carries the list\u2019s ID, the boss, the job and the day, as part 1 of 1'); }
+  { const M = await one(), s = M.sent[sw('Joe')];
+    ok(s && s.ids.length === 10 && s.at >= NOW - 5 && !M.queue[sw('Joe')] && !M.sent[sw('Maria')], 'the sent map records what Joe was given and when; Maria has nothing recorded', JSON.stringify(M.sent)); }
+  ok((await text('#send-next')) === 'Send Maria\u2019s list' && (await card('Joe')).again && (await card('Joe')).parts.length === 0, 'the queue moves on to the next worker, and Joe is offered Send again');
+  ok((await text('#send-count')) === '1 of 2 sent', 'and the queue says how far through it is', await text('#send-count'));
+  // The share sheet opens and never comes back: the phone closed the app behind it.
+  await ev('window.__shareFail="hang",true'); await click('#send-next'); await sleep(500);
+  { const M = await one(), qm = M.queue[sw('Maria')];
+    ok(qm && qm.parts.length === 1 && qm.parts[0].done === false && !M.sent[sw('Maria')], 'the send is written down while the share sheet is still open', JSON.stringify(M.queue));
+    await toSend(); const c = await card('Maria');
+    ok(c.state === 'part' && c.parts.length === 1 && !c.parts[0].done && (await one()).queue[sw('Maria')].parts[0].link === qm.parts[0].link && (await text('#send-next')) === 'Send Maria\u2019s list', 'reopened, Maria\u2019s part is there unticked, the same link, ready to send or tick'); }
+  // Backing out of the share sheet is not a send.
+  await ev('window.__shareFail="AbortError",true'); await click('#send-next'); await sleep(400);
+  { const M = await one(), c = await card('Maria');
+    ok(c.state === 'part' && c.parts.length === 1 && !c.parts[0].done && c.pill === 'Not sent' && !M.sent[sw('Maria')] && (await shares()).length === 0, 'backing out of the share sheet ticks nothing', JSON.stringify(c));
+    ok(M.queue[sw('Maria')] && M.queue[sw('Maria')].parts.length === 1 && M.queue[sw('Maria')].parts[0].done === false, 'and the send stays written down'); }
+  await ev('window.__shareFail=null,true'); await click('#send-next');
+  await until('!!document.getElementById("send-done")', 5000, 'everything sent');
+  ok((await cards()).every(c => c.state === 'sent') && JSON.stringify((await one()).queue) === '{}', 'when every worker is ticked the screen says everything is sent');
+  await ev('history.back()'); await until('location.hash===' + q(DAYS), 4000, 'day');
+  ok(JSON.stringify(await dayStates()) === JSON.stringify({ Joe:'sent', Maria:'sent' }) && /Everything is sent/.test(await text('#day-status')), 'and the Day screen agrees');
+
+  // A worst-case list: eight tasks of 200 Cyrillic characters for Zed.
+  const WORST = Array.from({ length:8 }, () => cyr(200));
+  for(let i = 0; i < WORST.length; i++) await addTask(i ? null : 'Zed', WORST[i]);
+  ok(JSON.stringify(await dayStates()) === JSON.stringify({ Joe:'sent', Maria:'sent', Zed:'new' }), 'adding tasks for Zed marks Zed and nobody else', JSON.stringify(await dayStates()));
+  await click('[data-action="send-open"]'); await until('location.hash===' + q(SENDS), 4000, 'send'); await measured();
+  let z = await card('Zed');
+  ok(z.parts.length >= 2 && z.parts.every(p => p.chars <= 700), 'a worst-case list splits: ' + z.parts.length + ' parts, the longest ' + Math.max.apply(null, z.parts.map(p => p.chars)) + ' characters, every one within 700', JSON.stringify(z.parts));
+  ok(new RegExp('goes as ' + z.parts.length + '\\.').test(z.text) && (await text('#send-next')) === 'Send Zed\u2019s list, part 1 of ' + z.parts.length, 'the part count is shown before anything is sent', await text('#send-next'));
+  ok((await card('Joe')).state === 'sent' && (await card('Maria')).state === 'sent' && JSON.stringify((await one()).queue) === '{}', 'the others stay sent');
+  await shot('22-send-parts-dark-320');
+  await click('#send-next'); await until('(function(){var p=document.querySelector(".part");return p&&p.dataset.done==="1"})()', 5000, 'part 1 ticked');
+  const QZ = (await one()).queue[sw('Zed')], NP = QZ.parts.length;
+  { const M = await one(), s = M.sent[sw('Zed')]; z = await card('Zed');
+    ok(z.state === 'part' && z.pill === '1 of ' + NP + ' sent' && z.parts[0].done && z.parts.slice(1).every(p => !p.done), 'part 1 has its own tick, and Zed shows as part sent');
+    ok(s && s.at === 0 && s.ids.join() === QZ.parts[0].ids.slice().sort().join() && s.ids.length < 8, 'what part 1 carried is recorded as given, but Zed is not recorded as sent', JSON.stringify(s));
+    ok(QZ.parts.every(p => p.link.length <= 700) && QZ.parts.length === NP && (await text('#send-next')) === 'Send Zed\u2019s list, part 2 of ' + NP, 'the queue holds every link of this send and moves to part 2'); }
+  { const got = []; for(const p of QZ.parts) got.push(await decode(p.link));
+    const vs = got.map(g => g.value || {}), ids = [].concat.apply([], vs.map(v => (v.tasks || []).map(t => t.id)));
+    ok(got.every(g => g.ok) && new Set(vs.map(v => v.sendId)).size === 1 && vs[0].sendId === QZ.sendId && vs.every((v, i) => v.part === i + 1 && v.parts === NP), 'every part decodes, under one sendId, numbered 1 to ' + NP);
+    ok(ids.length === 8 && new Set(ids).size === 8 && [].concat.apply([], vs.map(v => v.tasks.map(t => t.text))).join('|') === WORST.join('|'), 'each task travels in exactly one part, and the order holds across parts');
+    const fwd = await ev('(async function(ls){var m=null;for(var i=0;i<ls.length;i++){m=EGSCrew.mergeList(m,(await EGSCrew.decode(ls[i].slice(ls[i].indexOf("#crew=")+6),"list")).value).list}return JSON.stringify([m.tasks,EGSCrew.partsStatus(m.send)])})(' + JSON.stringify(QZ.parts.map(p => p.link)) + ')');
+    const rev2 = await ev('(async function(ls){var m=null;for(var i=ls.length-1;i>=0;i--){m=EGSCrew.mergeList(m,(await EGSCrew.decode(ls[i].slice(ls[i].indexOf("#crew=")+6),"list")).value).list}return JSON.stringify([m.tasks,EGSCrew.partsStatus(m.send)])})(' + JSON.stringify(QZ.parts.map(p => p.link)) + ')');
+    ok(fwd === rev2 && JSON.parse(fwd)[1].complete === true && JSON.parse(fwd)[0].length === 8, 'on the worker\u2019s side the parts merge to the same complete list in either order'); }
+  // The sent map survives a restart mid-queue.
+  const MID = JSON.stringify(await one());
+  await toSend();
+  ok(JSON.stringify(await one()) === MID, 'a cold restart mid-queue keeps the sent map and the queue, byte for byte');
+  z = await card('Zed');
+  ok(z.state === 'part' && z.parts.length === NP && z.parts[0].done && z.parts.slice(1).every(p => !p.done) && (await text('#send-next')) === 'Send Zed\u2019s list, part 2 of ' + NP, 'and the screen comes back with part 1 ticked and part 2 next', JSON.stringify(z.parts));
+  await inCard('Zed', '.part[data-n="0"] .tick'); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part') + ').dataset.done==="0"', 4000, 'unticked');
+  ok((await one()).queue[sw('Zed')].parts[0].done === false && (await card('Zed')).pill === 'Not sent', 'a tick can be taken back if the text did not go');
+  await inCard('Zed', '.part[data-n="0"] .tick'); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part') + ').dataset.done==="1"', 4000, 'ticked again');
+  await ev('window.__shares=[],true');
+  for(let i = 1; i < NP; i++){ await click('#send-next'); await until('document.querySelectorAll(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part[data-done="1"]') + ').length===' + (i + 1) + ' || document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"]') + ').dataset.state==="sent"', 5000, 'part ' + (i + 1));
+    if(i < NP - 1 && (await card('Zed')).state === 'sent') ok(false, 'Zed counts as sent only when every part is ticked', 'sent after part ' + (i + 1) + ' of ' + NP); }
+  await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"]') + ').dataset.state==="sent"', 5000, 'Zed sent');
+  sh = await shares();
+  ok(sh.length === NP - 1 && sh.every((s, i) => linkOf(s) === QZ.parts[i + 1].link && new RegExp('\\(part ' + (i + 2) + ' of ' + NP + '\\)$').test(s.text.split('\n')[0])), 'after the restart the remaining parts go out as the SAME send, each labelled with its part');
+  { const M = await one(), s = M.sent[sw('Zed')];
+    ok(s.at === QZ.at && s.at > 0 && s.ids.length === 8 && !M.queue[sw('Zed')] && !!(await ev('!!document.getElementById("send-done")')), 'Zed counts as sent only once every part is ticked, as of when the links were measured'); }
+
+  // An edit after sending marks the right workers and no others.
+  await toDay();
+  ok(JSON.stringify(await dayStates()) === JSON.stringify({ Joe:'sent', Maria:'sent', Zed:'sent' }), 'everyone starts sent');
+  await openTask(REAL[4]); await type('#task-text', 'Set the vanity in the main bath, shim and silicone'); await click('[data-action="task-save"]'); await closed();
+  ok(JSON.stringify(await dayStates()) === JSON.stringify({ Joe:'changed', Maria:'sent', Zed:'sent' }) && /1 person has something not sent/.test(await text('#day-status')), 'changing one of Joe\u2019s tasks marks Joe "changes not sent" and nobody else', JSON.stringify(await dayStates()));
+  await openTask(REAL[0]); await chip('Maria', '#task-who-chips'); await click('[data-action="task-save"]'); await closed();
+  ok(JSON.stringify(await dayStates()) === JSON.stringify({ Joe:'changed', Maria:'changed', Zed:'sent' }), 'giving one of Joe\u2019s tasks to Maria marks both of them, and not Zed', JSON.stringify(await dayStates()));
+  await toSend(); await ev('window.__shares=[],true');
+  await click('#send-next'); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Joe') + '"]') + ').dataset.state==="sent"', 5000, 'Joe resent');
+  await click('#send-next'); await until('!!document.getElementById("send-done")', 5000, 'Maria resent');
+  sh = await shares();
+  const JOE2 = linkOf(sh[0]), MARIA2 = linkOf(sh[1]);
+  { const j = (await decode(JOE2)).value, m = (await decode(MARIA2)).value, moved = j.tasks.find(t => t.text === REAL[0]);
+    ok(moved && moved.gone === 'reassigned' && j.tasks.filter(t => !t.gone).length === 9 && j.tasks.find(t => t.id === '5').text === 'Set the vanity in the main bath, shim and silicone', 'Joe\u2019s resend carries the reassigned task as a tombstone, and the new words', JSON.stringify(moved));
+    ok(m.tasks.some(t => t.text === REAL[0] && t.gone === null && t.id === moved.id) && m.workers.length === 1 && m.workers[0].id === sw('Maria'), 'Maria\u2019s carries the same task, live'); }
+  await toDay();
+  await openTask('Cut in ceilings'); dialogs.seen.length = 0; dialogs.answer = true; await click('[data-action="task-cancel"]'); await closed();
+  ok(/Maria is told it\u2019s cancelled the next time you send/.test(dialogs.seen[0]) && JSON.stringify(await dayStates()) === JSON.stringify({ Joe:'sent', Maria:'changed', Zed:'sent' }), 'cancelling a task Maria was sent says she will be told, and marks Maria alone', dialogs.seen.join('|') + JSON.stringify(await dayStates()));
+  await click('.tasks[data-wid="' + sw('Zed') + '"] .task:nth-child(2) [data-action="task-up"]');
+  await until('document.querySelector(' + q('#day-body .grp[data-wid="' + sw('Zed') + '"] .pill') + ').dataset.state==="changed"', 4000, 'Zed changed');
+  ok(JSON.stringify(await dayStates()) === JSON.stringify({ Joe:'sent', Maria:'changed', Zed:'changed' }), 'reordering Zed\u2019s tasks marks Zed, and still not Joe');
+  await toSend(); await ev('window.__shares=[],true');
+  await click('#send-next'); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Maria') + '"]') + ').dataset.state==="sent"', 5000, 'Maria resent');
+  { const m = (await decode(linkOf((await shares())[0]))).value, c = m.tasks.find(t => t.text === 'Cut in ceilings');
+    ok(c && c.gone === 'cancelled' && m.tasks.filter(t => !t.gone).length === 2, 'Maria\u2019s resend carries the cancelled task as a tombstone', JSON.stringify(m.tasks.map(t => [t.id, t.gone]))); }
+  // A resend merges into the worker's copy without losing what they did.
+  { const out = JSON.parse(await ev('(async function(a,b,wid){var p=function(l){return l.slice(l.indexOf("#crew=")+6)};var first=(await EGSCrew.decode(p(a),"list")).value;var mine=EGSCrew.mergeList(null,first).list;'
+      + 'var st=EGSCrew.setStatus({}, "6", "done", "", 1790000100);st=EGSCrew.setStatus(st, "5", "waiting", "Waiting on the plumber", 1790000200);st=EGSCrew.setStatus(st, "1", "done", "", 1790000300);'
+      + 'var r=EGSCrew.mergeList(mine,(await EGSCrew.decode(p(b),"list")).value);var rep=EGSCrew.buildReport(r.list,wid,st,1790000400);'
+      + 'return JSON.stringify({ok:r.ok,tasks:r.list.tasks,report:rep.tasks,state:st})})(' + q(JOE1) + ',' + q(JOE2) + ',' + q(sw('Joe')) + ')'));
+    const t5 = out.tasks.find(t => t.id === '5'), t1 = out.tasks.find(t => t.id === '1'), r5 = out.report.find(t => t.id === '5'), r6 = out.report.find(t => t.id === '6');
+    ok(out.ok && out.tasks.length === 10 && t5.text === 'Set the vanity in the main bath, shim and silicone' && t1.gone === 'reassigned', 'merged on the worker\u2019s side, the resend updates the words and marks the task that left');
+    ok(r5 && r5.status === 'waiting' && r5.note === 'Waiting on the plumber' && r6 && r6.status === 'done' && !out.report.some(t => t.id === '1') && out.report.length === 9, 'and nothing the worker did is lost: their done and waiting-on marks, and the note, still report', JSON.stringify(out.report.filter(t => t.status !== 'open'))); }
+  // Two edits inside one second, then a send in that same second, then another edit.
+  { await sendAll();
+    const res = JSON.parse(await ev('(async function(job,day,wid){var real=Date.now,T=real.call(Date);Date.now=function(){return T};try{'
+      + 'var a=lists[0].tasks.filter(function(t){return t.worker===wid&&!t.gone});'
+      + 'await listEdit(job,day,function(r,n){return taskChange(r,n,a[0].id,"once",wid)});await listEdit(job,day,function(r,n){return taskChange(r,n,a[0].id,"twice",wid)});'
+      + 'var edited=lists[0].tasks.find(function(t){return t.id===a[0].id}).editedAt;render();'
+      + 'for(var i=0;i<200&&(_prep.busy||!_prep.by[wid]);i++)await new Promise(function(r){setTimeout(r,25)});'
+      + 'var n=_prep.by[wid].parts.length;for(var p=0;p<n;p++)await sendPart(wid,p);var afterSend=sendState(lists[0],wid).k,at=lists[0].sent[wid].at;'
+      + 'await listEdit(job,day,function(r,n){return taskChange(r,n,a[1].id,"later",wid)});'
+      + 'return JSON.stringify({now:Math.floor(T/1000),edited:edited,at:at,afterSend:afterSend,afterEdit:sendState(lists[0],wid).k,second:lists[0].tasks.find(function(t){return t.id===a[1].id}).editedAt})'
+      + '}finally{Date.now=real}})(' + q(jobS.id) + ',' + q(today) + ',' + q(sw('Zed')) + ')'));
+    ok(res.edited > res.now && res.afterSend === 'sent' && res.at >= res.edited, 'two edits in one second push the edit time past the clock, and the send in that second still counts as covering them', JSON.stringify(res));
+    ok(res.afterEdit === 'changed' && res.second > res.at, 'and an edit to another task in that same second is not missed: it is stamped after the send', JSON.stringify(res)); }
+  // No share sheet: the link is copied, and copying is not sending.
+  await toSend();
+  await ev('navigator.share=undefined,Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:function(t){window.__clip=t;return Promise.resolve()}}}),true');
+  await click('#send-next'); await until('/Copied\\. Paste it into a text to Zed, then tick it\\./.test(document.getElementById("toast").textContent)', 4000, 'copied');
+  { const c = await card('Zed'); ok(c.state === 'part' && c.parts.every(p => !p.done) && /^Mike: tasks for Oak St reno/.test(await ev('window.__clip')) && (await ev('window.__clip')).split('\n')[1].indexOf('https://notebuilt.ca/#crew=') === 0, 'with no share sheet the same text is copied, and the part is not ticked for you', JSON.stringify(c)); }
+  await inCard('Zed', '.tick'); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part') + ').dataset.done==="1"', 4000, 'ticked by hand');
+  ok((await card('Zed')).parts.filter(p => p.done).length === 1 && (await card('Zed')).state === 'part', 'ticking it by hand ticks that part, and only that part');
+  const b4again = JSON.stringify(await one());
+  await inCard('Joe', '[data-action="send-again"]'); await measured(); await sleep(900);
+  { const c = await card('Joe'), b4 = b4again;
+    ok(c.parts.length === 1 && !c.parts[0].done && c.state === 'sent' && b4 === JSON.stringify(await one()), 'Send again measures a fresh send for someone already sent, and stores nothing until it is shared'); }
+
+  // Zed has a send started: one of eight parts ticked. Any change to his tasks makes those links stale.
+  { const started = async () => { await toSend(); if(!(await one()).queue[sw('Zed')]){ await inCard('Zed', '[data-action="send-part"]'); await until('!!document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part[data-done="1"]') + ')', 5000, 'a part of Zed\u2019s ticked'); }
+      const Q = (await one()).queue[sw('Zed')]; await toDay(); return Q; };
+    const dropped = async what => { const M = await one(); ok(!M.queue[sw('Zed')] && (await dayStates()).Zed === 'changed' && M.sent[sw('Zed')].ids.length === 8, what, JSON.stringify(M.queue)); };
+    ok(!!(await started()), 'Zed has a send started and not finished');
+    await click('.tasks[data-wid="' + sw('Zed') + '"] .task:nth-child(3) [data-action="task-up"]'); await until('document.querySelector(' + q('#day-body .grp[data-wid="' + sw('Zed') + '"] .pill') + ').dataset.state==="changed"', 4000, 'reordered');
+    await dropped('reordering his tasks drops the half-finished send: its links no longer say what the list says');
+    await started(); const zt = await ev('document.querySelector(' + q('.tasks[data-wid="' + sw('Zed') + '"] .task:nth-child(4) .task-text') + ').textContent');
+    await openTask(zt); await type('#task-text', 'Reworded for Zed'); await click('[data-action="task-save"]'); await closed();
+    await dropped('so does rewording one');
+    await started(); await openTask('Reworded for Zed'); dialogs.answer = true; await click('[data-action="task-cancel"]'); await closed();
+    await dropped('so does cancelling one');
+    await started(); const before9 = (await one()).tasks.length; await addTask('Zed', 'One more for Zed');
+    { const M = await one(); ok(!M.queue[sw('Zed')] && M.tasks.length === before9 + 1 && (await dayStates()).Zed === 'changed', 'and so does adding one', JSON.stringify(M.queue)); }
+    await openTask('Reworded for Zed'); await click('[data-action="task-restore"]'); await closed(); }
+  // The task that leaves someone with nothing still has to reach them.
+  { const D2 = '#/day/' + jobS.id + '/2027-02-01', S2 = '#/send/' + jobS.id + '/2027-02-01';
+    const two = async () => (await dump()).find(l => l.day === '2027-02-01');
+    await load(D2); await listsReady(); await until('!!document.getElementById("task-new")', 4000, 'second day');
+    await addTask('Maria', 'Only task of the day');
+    ok((await dump()).length === 2 && (await two()).listId !== (await one()).listId && (await two()).tasks.length === 1, 'a second day for the same job is its own list, with its own ID');
+    await load(S2); await listsReady(); await hookShare(); await measured(); await ev('window.__shares=[],true'); await sendAll();
+    await load(D2); await listsReady(); await until('!!document.querySelector("#day-body .task")', 4000, 'day 2');
+    await openTask('Only task of the day'); await chip('Joe', '#task-who-chips'); await click('[data-action="task-save"]'); await closed();
+    ok(JSON.stringify(await dayStates()) === JSON.stringify({ Joe:'new', Maria:'changed' }) && /No tasks now\. They\u2019ll be told on the next send\./.test(await text('#day-body')), 'giving away Maria\u2019s only task leaves her on the list, with nothing, marked changes not sent', JSON.stringify(await dayStates()));
+    await load(S2); await listsReady(); await hookShare(); await measured(); await ev('window.__shares=[],true');
+    await inCard('Maria', '[data-action="send-part"]'); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Maria') + '"]') + ').dataset.state==="sent"', 5000, 'Maria told');
+    const m = (await decode(linkOf((await shares())[0]))).value;
+    ok(m.tasks.length === 1 && m.tasks[0].gone === 'reassigned' && m.tasks[0].text === 'Only task of the day' && m.workers[0].id === sw('Maria'), 'her link carries that task as a tombstone and nothing else', JSON.stringify(m.tasks));
+    ok((await card('Joe')).state === 'new' && (await card('Maria')).state === 'sent', 'and telling her does not count as sending Joe his'); }
+
+  // ---- the three refusals -------------------------------------------------------------------
+  section('The three refusals (rule 12)');
+  const LONGHAN = han(200);
+  await toDay(); await addTask('Zed', LONGHAN);
+  await toSend(); await ev('window.__shares=[],true');
+  z = await card('Zed');
+  ok(z.refused === 'task_too_long' && z.parts.length === 0, 'ONE TASK TOO LONG: a 200-character Chinese task is refused for Zed before any share sheet', JSON.stringify(z).slice(0, 300));
+  ok(z.text.indexOf('\u201c' + Array.from(LONGHAN).slice(0, 40).join('') + '\u2026\u201d is too long to send in a link. Shorten it, then send again.') >= 0, 'it names the task and asks for a shorter one', z.text);
+  ok(!/name/i.test(z.text.replace('Zed', '')) && z.fix && /Shorten this task/.test(z.text), 'it does not blame the names');
+  ok(await ev('!document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] [data-action="send-part"]') + ')') && (await text('#send-next')) === null && /Nothing else can go until/.test(await text('#app')), 'there is nothing to tap that would send it, and the queue does not offer it');
+  ok(!(await card('Joe')).refused && !(await card('Maria')).refused && (await card('Joe')).state === 'sent' && (await card('Maria')).state === 'sent', 'the others are not refused, and stay sent');
+  ok(!(await one()).queue[sw('Zed')] && (await shares()).length === 0, 'nothing was queued for Zed and nothing was shared');
+  ok(!(await overflow()), 'a refusal: no horizontal scroll at 320px', await overflow());
+  await shot('23-refusal-task-dark-320');
+  await inCard('Zed', '[data-action="send-fix"]'); await until('!!document.getElementById("task-text")', 3000, 'task sheet from the refusal');
+  ok((await ev('document.getElementById("task-text").value')) === LONGHAN, 'Shorten this task opens that very task');
+  await type('#task-text', 'Short enough now'); await click('[data-action="task-save"]'); await closed(); await measured();
+  z = await card('Zed');
+  ok(!z.refused && z.parts.length >= 1 && z.parts.every(p => p.chars <= 700), 'shortened, the refusal goes and Zed\u2019s list measures', JSON.stringify(z.parts));
+  // The third case cannot happen with today's limits (spec §6). The component
+  // is made to say it, to prove the app shows it plainly and sends nothing.
+  await ev('window.__split=EGSCrew.split,EGSCrew.split=function(){return Promise.resolve({ok:false,code:"cannot_fit",reason:EGSCrew.REASONS.cannot_fit})},rev++,render(),true'); await measured();
+  z = await card('Zed');
+  ok(z.refused === 'cannot_fit' && /This is too big to send as links, however it is split\./.test(z.text) && !z.fix && z.parts.length === 0, 'THE WHOLE LIST CANNOT FIT (unreachable today; the component is stubbed to say so): shown plainly, with nothing to send and nothing blamed', z.text);
+  ok(!/too long to send|names leave no room/.test(z.text) && (await shares()).length === 0, 'and it is not dressed up as either of the other two');
+  await ev('EGSCrew.split=window.__split,rev++,render(),true'); await measured();
+
+  // The names alone leave no room: three unrelated 40-character names in rare characters.
+  const N1 = rare(40), N2 = rare(40), N3 = rare(40);
+  await wipe(); await load(); await type('#boss-name', N1); await click('[data-action="setup-save"]'); await until('!!document.querySelector(".topbar")', 8000, 'home'); await listsReady();
+  await click('[data-go="crew"]'); await addRec(N3); await addRec('Joe'); await goHome(); await click('[data-go="jobs"]'); await addRec(N2); await goHome();
+  { const jb2 = (await stored('jobs'))[0], cr2 = await stored('roster');
+    await load('#/day/' + jb2.id + '/' + today); await listsReady(); await until('!!document.getElementById("task-new")', 4000, 'day');
+    await addTask(N3, 'Sweep up'); await addTask('Joe', 'Sweep the hall');
+    await load('#/send/' + jb2.id + '/' + today); await listsReady(); await hookShare(); await measured();
+    const c = await card(N3), j = await card('Joe');
+    ok(c.refused === 'names_too_long' && c.parts.length === 0, 'THE NAMES LEAVE NO ROOM: three 40-character names in rare characters are refused before any share sheet', JSON.stringify(c).slice(0, 200));
+    const named = [N1, N2, N3].filter(n => c.text.indexOf('\u201c' + n + '\u201d takes the most room') >= 0);
+    ok(/The names leave no room for tasks in a link\./.test(c.text) && named.length === 1, 'it says it is the names, and says which name');
+    ok(c.text.indexOf('Sweep up') < 0 && !/too long to send in a link/.test(c.text) && c.fix && /Shorten this name/.test(c.text), 'it never blames the task');
+    ok(!j.refused || j.refused === 'names_too_long', 'Joe, beside the same two long names, is ' + (j.refused ? 'refused for the names too' : 'not refused') + ': never for his task', j.refused);
+    ok((await shares()).length === 0 && JSON.stringify((await dump())[0].queue) === '{}', 'nothing was shared and nothing queued');
+    await shot('24-refusal-names-dark-320'); ok(!(await overflow()), 'the names refusal: no horizontal scroll at 320px', await overflow());
+    await inCard(N3, '[data-action="send-fix"]'); await until('!!document.querySelector("#sheet-root input[data-name-input]")', 3000, 'name sheet from the refusal');
+    ok((await ev('document.querySelector("#sheet-root input[data-name-input]").value')) === named[0], 'Shorten this name opens the sheet for the very name it quoted');
+    await type('#sheet-root input[data-name-input]', 'Short'); await ev('document.querySelector("#sheet-root .btn.primary").click()'); await closed(); await measured();
+    const cs2 = await cards();
+    ok(cs2.length === 2 && cs2.every(x => !x.refused && x.parts.length === 1 && x.parts[0].chars <= 700), 'the shorter name reaches the very next measurement, and with one name shortened both lists fit: ' + cs2.map(x => x.name.slice(0, 5) + '=' + x.parts.map(p => p.chars).join('+')).join(', '), JSON.stringify(cs2.map(x => [x.refused, x.parts.length])));
+    await click('#send-next'); await until('window.__shares.length===1', 5000, 'shared'); const d2 = (await decode(linkOf((await shares())[0]))).value;
+    ok([d2.boss.name, d2.job.name, d2.workers[0].name].indexOf('Short') >= 0 && [d2.boss.name, d2.job.name, d2.workers[0].name].indexOf(named[0]) < 0, 'and the link that goes out carries the new name, not the one the list was first saved with'); }
+
+  // ---- lists in a backup ----------------------------------------------------------------------
+  section('Lists in a backup');
+  await setup('Mike'); await listsReady();
+  await click('[data-go="crew"]'); await addRec('Joe'); await addRec('Maria'); await goHome(); await click('[data-go="jobs"]'); await addRec('Oak St reno'); await addRec('Alder duplex'); await goHome();
+  const jbB = await stored('jobs'), crB = await stored('roster');
+  const DB1 = '#/day/' + jbB[0].id + '/' + today, SB1 = '#/send/' + jbB[0].id + '/' + today;
+  await load(DB1); await listsReady(); await until('!!document.getElementById("task-new")', 4000, 'day');
+  await addTask('Joe', 'Hang 6 doors'); await addTask(null, 'Case the windows'); await addTask('Maria', 'Prime walls');
+  await load(SB1); await listsReady(); await hookShare(); await measured();
+  await click('#send-next'); await until('document.querySelector(".send-w").dataset.state==="sent"', 5000, 'Joe sent');
+  await ev('window.__shareFail="AbortError",true'); await click('#send-next'); await sleep(400);
+  await load('#/day/' + jbB[1].id + '/2027-01-15'); await listsReady(); await until('!!document.getElementById("task-new")', 4000, 'second day'); await addTask('Maria', 'Demo the kitchen');
+  const LB = await dump(), LSB = await snap();
+  ok(LB.length === 2 && Object.keys(LB.find(l => l.day === today).queue).length === 1 && Object.keys(LB.find(l => l.day === today).sent).length === 1, 'the phone holds two lists: one sent to Joe, with a send to Maria started and not finished');
+  await load('#/support'); await listsReady();
+  had = fs.readdirSync(work); await click('[data-action="export"]');
+  const FL = await download(had), TL = fs.readFileSync(path.join(work, FL), 'utf8'), BL = JSON.parse(TL); fs.renameSync(path.join(work, FL), path.join(work, 'lists.json'));
+  const noQueue = ls => JSON.stringify(ls.map(l => Object.assign({}, l, { queue:{} })).sort((x, y) => x.listId < y.listId ? -1 : 1));
+  ok(BL.settings.schemaVersion === 3 && BL.crew.lists.length === 2 && noQueue(BL.crew.lists) === noQueue(LB) && BL.crew.lists.every(l => JSON.stringify(l.queue) === '{}'), 'the backup carries both lists as stored, sent map included, and leaves the unfinished send behind');
+  ok(TL.indexOf('#crew=') < 0, 'so no list link is written into the file');
+  await wipe(); await load(); dialogs.seen.length = 0;
+  await pickFile('.setup input[data-import]', path.join(work, 'lists.json'));
+  await until('!!document.querySelector(".topbar")', 8000, 'home after restore'); await listsReady();
+  ok((await raw('notebuiltpro.roster')) === JSON.stringify(crB) && (await raw('notebuiltpro.jobs')) === JSON.stringify(jbB) && LSB.indexOf(JSON.stringify(JSON.stringify(crB))) > 0, 'the restored crew and jobs are as they were');
+  ok(noQueue(await dump()) === noQueue(LB) && /2 days so far/.test(await text('#home-days')), 'export, wipe, restore: both lists come back identical, same list IDs, same sent map', await text('#home-days'));
+  await load(DB1); await listsReady(); await until('document.querySelectorAll("#day-body .task").length===3', 5000, 'restored tasks');
+  ok(JSON.stringify(await dayStates()) === JSON.stringify({ Joe:'sent', Maria:'new' }), 'and Joe is still sent, Maria still not', JSON.stringify(await dayStates()));
+  await load('#/support'); await listsReady(); had = fs.readdirSync(work); await click('[data-action="export"]');
+  { const f = await download(had), t = fs.readFileSync(path.join(work, f), 'utf8'), st = x => x.replace(/"exportedAt": "[^"]*"/, '"exportedAt": ""'); fs.renameSync(path.join(work, f), path.join(work, 'lists2.json'));
+    ok(st(t) === st(TL), 'export again: the two files are byte-identical apart from the export time'); }
+  dialogs.seen.length = 0; dialogs.answer = false;
+  await pickFile('.wrap input[data-import]', path.join(work, 'lists.json')); await sleep(400);
+  ok(dialogs.seen.length === 1 && /Mike, 2 on the crew, 2 jobs, 2 lists\./.test(dialogs.seen[0]), 'restoring over lists asks first and says how many lists the file holds', dialogs.seen.join('|'));
+  // Lists on a phone that has lost its name are still something a restore would replace.
+  { const keepL = await dump(); await wipe(); await seed([]); await seedLists(keepL); await load();
+    ok(await ev('!!document.getElementById("boss-name")') && (await snap()) === '[]', 'a phone with lists but no name is at first run');
+    dialogs.seen.length = 0; dialogs.answer = false;
+    await pickFile('.setup input[data-import]', path.join(work, 'lists.json')); await sleep(600);
+    ok(dialogs.seen.length === 1 && /REPLACES/.test(dialogs.seen[0]) && noQueue(await dump()) === noQueue(keepL) && await ev('!!document.getElementById("boss-name")'), 'restoring there still asks first, because the file\u2019s lists would replace the ones on the phone; declining leaves them', dialogs.seen.join('|'));
+    dialogs.answer = true; await pickFile('.setup input[data-import]', path.join(work, 'lists.json')); await until('!!document.querySelector(".topbar")', 8000, 'restored'); await listsReady();
+    await load('#/support'); await listsReady(); }
+  // A file with no lists section leaves the lists alone (rule 8).
+  { const g = JSON.parse(TL); delete g.crew; dialogs.answer = true; const b4 = JSON.stringify(await dump());
+    await pickFile('.wrap input[data-import]', tmpFile('nolists.json', JSON.stringify(g))); await until('location.hash==="#/home"', 6000, 'restored without lists');
+    ok(/Mike, 2 on the crew, 2 jobs\.$/.test(dialogs.seen[dialogs.seen.length - 1]) && JSON.stringify(await dump()) === b4 && /2 days so far/.test(await text('#home-days')), 'a backup with no lists section restores and leaves this phone\u2019s lists as they are'); }
+  // A file whose list is changed but valid restores: the refusals below are not vacuous.
+  { const g = JSON.parse(TL); g.crew.lists[0].tasks[0].text = 'Changed in the file'; g.crew.lists[0].junk = { a:1 }; g.crew.lists[0].tasks[0].junk = '<b>';
+    g.crew.lists[0].queue = { [g.crew.lists[0].workers[0].id]:{ sendId:'AAAAAAAA', at:NOW, parts:[{ link:'https://evil.example/#crew=1AAAA', ids:[], done:false }] } };
+    await load('#/support'); await listsReady(); dialogs.answer = true;
+    await pickFile('.wrap input[data-import]', tmpFile('changed.json', JSON.stringify(g))); await until('location.hash==="#/home"', 6000, 'changed list restored');
+    const now2 = await dump(), l0 = now2.find(l => l.listId === g.crew.lists[0].listId);
+    ok(l0.tasks[0].text === 'Changed in the file' && !('junk' in l0) && !('junk' in l0.tasks[0]) && JSON.stringify(l0.queue) === '{}' && JSON.stringify(now2).indexOf('evil.example') < 0, 'a valid file restores its lists; unknown keys are dropped, and so is any queue the file carries, link and all'); }
+  await load('#/support'); await listsReady(); dialogs.answer = true;
+  await pickFile('.wrap input[data-import]', path.join(work, 'lists.json')); await until('location.hash==="#/home"', 6000, 'back to the good file');
+  await load('#/support'); await listsReady();
+  { const gl = () => JSON.parse(TL), first = g => g.crew.lists.find(l => l.day === today);
+    const badLists = [
+      ['a list with a malformed ID', g => { first(g).listId = 'B'.repeat(22); }],
+      ['a list that is not a record', g => { g.crew.lists[0] = 'list'; }],
+      ['markup in a task', g => { first(g).tasks[0].text = '<img src=x onerror="window.__y=1">'; }],
+      ['a 201-character task', g => { first(g).tasks[0].text = 'x'.repeat(201); }],
+      ['a task with no words', g => { first(g).tasks[0].text = '   '; }],
+      ['a task for someone not on the list', g => { first(g).tasks[0].worker = nodeId(); }],
+      ['two tasks with one ID', g => { first(g).tasks[1].id = first(g).tasks[0].id; }],
+      ['a task ID of the wrong shape', g => { first(g).tasks[0].id = '01'; }],
+      ['a tombstone kind the boss\u2019s copy never holds', g => { first(g).tasks[0].gone = 'reassigned'; }],
+      ['an unknown tombstone kind', g => { first(g).tasks[0].gone = 'deleted'; }],
+      ['an edit time that is not a number', g => { first(g).tasks[0].editedAt = '1790000000'; }],
+      ['an impossible day', g => { first(g).day = '2026-02-30'; }],
+      ['markup in the list\u2019s job name', g => { first(g).job.name = 'Oak <script>window.__y=1</script>'; }],
+      ['a malformed boss ID in a list', g => { first(g).boss.id = 'short'; }],
+      ['a list with nobody on it', g => { first(g).workers = []; first(g).tasks = []; first(g).sent = {}; }],
+      ['31 people on one list', g => { first(g).workers = Array.from({ length:31 }, (_, i) => ({ id:nodeId(), name:'W' + i })); first(g).tasks = []; first(g).sent = {}; }],
+      ['301 tasks on one list', g => { const w = first(g).workers[0].id; first(g).tasks = Array.from({ length:301 }, (_, i) => ({ id:(i + 1).toString(36), worker:w, text:'t', order:i + 1, editedAt:NOW, gone:null })); first(g).sent = {}; }],
+      ['a sent record for someone not on the list', g => { first(g).sent[nodeId()] = { at:NOW, ids:[] }; }],
+      ['a sent record naming a task that is not on the list', g => { const k = Object.keys(first(g).sent)[0]; first(g).sent[k].ids.push('zz'); }],
+      ['a sent record naming one task twice', g => { const k = Object.keys(first(g).sent)[0]; first(g).sent[k].ids.push(first(g).sent[k].ids[0]); }],
+      ['a sent time that is negative', g => { const k = Object.keys(first(g).sent)[0]; first(g).sent[k].at = -5; }],
+      ['a sent map that is a list', g => { first(g).sent = []; }],
+      ['no sent map at all', g => { delete first(g).sent; }],
+      ['a list time that is not a number', g => { first(g).updatedAt = 'now'; }],
+      ['one list ID twice', g => { g.crew.lists[1].listId = g.crew.lists[0].listId; }],
+      ['two lists for one job\u2019s day', g => { g.crew.lists[1].job = JSON.parse(JSON.stringify(g.crew.lists[0].job)); g.crew.lists[1].day = g.crew.lists[0].day; }],
+      ['a report alongside good lists', g => { g.crew.reports = [{ listId:g.crew.lists[0].listId, workerId:g.crew.lists[0].workers[0].id }]; }]
+    ];
+    const lsBefore = await snap(), dbBefore = JSON.stringify(await dump());
+    for(let i = 0; i < badLists.length; i++){
+      const g = gl(); badLists[i][1](g); dialogs.seen.length = 0;
+      await pickFile('.wrap input[data-import]', tmpFile('badlist' + i + '.json', JSON.stringify(g)));
+      await until('/Not restored/.test(document.getElementById("sheet-root").textContent)', 6000, 'refusal sheet for ' + badLists[i][0]);
+      ok((await snap()) === lsBefore && JSON.stringify(await dump()) === dbBefore && dialogs.seen.length === 0 && await ev('!window.__y'), 'refused whole, nothing changed: ' + badLists[i][0], await text('#sheet-root .sheet p'));
+      await click('[data-action="sheet-close"]'); await until('!document.getElementById("sheet-root").innerHTML', 3000, 'refusal sheet closed');
+    } }
+
+  // ---- lists this phone cannot read ----------------------------------------------------------
+  section('Damaged lists');
+  { const good2 = JSON.stringify(await dump());
+    ok((await ev('(function(){var l=lists.find(function(x){return x.tasks.length===3});return listPut(Object.assign({},l,{tasks:l.tasks.filter(function(t){return t.id!=="3"})}))})()')) === false && (await ev('(function(){var l=JSON.parse(JSON.stringify(lists.find(function(x){return Object.keys(x.sent).length})));l.sent={};return listPut(l)})()')) === false && JSON.stringify(await dump()) === good2, 'a list write that would drop a task, or forget what someone was sent, is refused');
+    await ev(`new Promise(function(res){var r=indexedDB.open('notebuiltpro');r.onsuccess=function(){var d=r.result,tx=d.transaction('lists','readwrite');tx.objectStore('lists').put({listId:'not-a-list',job:{name:'<img src=x onerror="window.__q=1">'}});tx.oncomplete=function(){d.close();res(true)}}})`);
+    const bad2 = JSON.stringify(await dump());
+    await load('#/day'); await until('listsState==="damaged"', 6000, 'damaged lists');
+    ok(/can\u2019t read the lists saved on this phone/.test(await text('#app')) && await ev('!window.__q && !document.querySelector("#app img") && !document.getElementById("day-past") && !document.getElementById("day-jobs")'), 'a stored list that fails the check is never drawn: Days says it cannot read the lists, and offers nothing to build on');
+    ok(JSON.stringify(await dump()) === bad2, 'and leaves them all untouched');
+    await load(DB1); await sleep(300);
+    ok(await ev('!document.getElementById("task-new")') && /can\u2019t read the lists/.test(await text('#app')), 'a day cannot be opened or added to while they are unreadable');
+    await load('#/support'); await sleep(300); await click('[data-action="export"]'); await sleep(700);
+    ok(backups().length === 0 && /didn\u2019t make a backup/.test(await text('#toast')), 'export refuses rather than write a backup with the lists missing', await text('#toast'));
+    await load('#/day'); await until('listsState==="damaged"', 6000, 'damaged lists');
+    dialogs.seen.length = 0; dialogs.answer = false; await click('[data-action="lists-fresh"]'); await sleep(250);
+    ok(dialogs.seen.length === 1 && /Start again with no lists\?/.test(dialogs.seen[0]) && JSON.stringify(await dump()) === bad2, 'Start again with no lists asks first, and declining removes nothing', dialogs.seen.join('|'));
+    dialogs.answer = true; await click('[data-action="lists-fresh"]'); await until('listsState==="ready" && !!document.getElementById("day-jobs")', 5000, 'fresh lists');
+    ok((await dump()).length === 0 && (await stored('roster')).length === 2 && (await stored('jobs')).length === 2, 'accepting removes the lists and keeps the crew and the jobs'); }
+
   // ---- back resolver -------------------------------------------------------------------
   section('Back and the hash');
   await load('#/home'); await sleep(200);
+  const HERE = await raw('notebuiltpro.settings');
   await click('[data-go="settings"]'); ok((await ev('location.hash')) === '#/settings', 'Settings writes a history entry');
   await click('[data-go="privacy"]'); ok((await ev('location.hash')) === '#/privacy' && /What I collect/.test(await text('#app')), 'Privacy opens from Settings');
   await click('[data-go="support"]'); ok((await ev('location.hash')) === '#/support', 'Support opens from Privacy');
@@ -657,7 +1191,7 @@ async function run(){
   await load('#report=1AAAAbbbbCCCC'); await sleep(250);
   ok((await ev('location.href')).indexOf('report=') < 0 && (await ev('location.hash')) === '#/home', 'a #report= payload is swapped out of the address at once');
   ok(/can’t read reports yet/.test(await text('#sheet-root')), 'and the app says plainly that it cannot read reports yet');
-  ok((await raw('notebuiltpro.settings')) === A, 'without touching anything');
+  ok((await raw('notebuiltpro.settings')) === HERE, 'without touching anything');
   await click('[data-action="sheet-close"]'); await sleep(200);
   await ev('location.hash="#report=1ZZZZ"'); await until('location.href.indexOf("report=")<0', 4000, 'in-app report link stripped');
   ok(/A crew report/.test(await text('#sheet-root')), 'a report link tapped while the app is open gets the same treatment');
@@ -669,7 +1203,7 @@ async function run(){
   await click('.topbar [data-share-app]'); await sleep(200);
   { const sh = await ev('JSON.stringify(window.__shared)'), o = JSON.parse(sh);
     ok(o.url === URL0 && Object.keys(o).sort().join() === 'text,title,url', 'the header share icon sends the app link', sh);
-    ok(sh.indexOf(a.boss.id) < 0 && sh.indexOf('Mike') < 0, 'and nothing of the user’s'); }
+    ok(sh.indexOf(JSON.parse(HERE).boss.id) < 0 && sh.indexOf('Mike') < 0, 'and nothing of the user’s'); }
   await click('[data-go="settings"]'); await click('[data-go="support"]'); await ev('window.__shared=null,true');
   await click('.wrap [data-share-app]'); await sleep(200);
   ok((await ev('window.__shared && window.__shared.url')) === URL0, 'the Support page share block uses the same handler');
@@ -725,15 +1259,18 @@ async function run(){
     var tx=d.transaction(o.stores,'readonly');o.lists=tx.objectStore('lists').keyPath;o.reports=tx.objectStore('reports').keyPath;var c=tx.objectStore('reports').count();c.onsuccess=function(){o.n=c.result;d.close();res(JSON.stringify(o))}}})`);
   ok((await layout()) === '{"v":2,"stores":["lists","reports"],"lists":"listId","reports":["listId","workerId"],"n":0}', 'lists are keyed by listId; reports by listId and workerId together, one record per worker per list', await layout());
   const oldDb = withRecord => ev(`new Promise(function(res,rej){var r=indexedDB.open('notebuiltpro',1);r.onupgradeneeded=function(){r.result.createObjectStore('lists',{keyPath:'listId'});var s=r.result.createObjectStore('reports',{keyPath:'listId'});${withRecord ? "s.put({listId:'L1',kept:true});" : ''}};r.onsuccess=function(){r.result.close();res(true)};r.onerror=function(){rej(r.error)}})`);
-  await setup('Mike'); await click('[data-go="settings"]'); await click('[data-go="support"]');
-  await oldDb(false);
+  const KEEPS = await raw('notebuiltpro.settings');
+  const oldPhone = async withRecord => { await wipe(); await seed([['notebuiltpro.settings', KEEPS], ['notebuiltpro.installPromptDismissed', '1']]); await oldDb(withRecord); await load('#/support'); };
+  await oldPhone(false); await listsReady();
+  ok(/"reports":\["listId","workerId"\],"n":0/.test(await layout()) && /"v":2/.test(await layout()), 'a stage 1 database, with its empty reports store, is re-keyed the first time the lists are read', await layout());
   { const had2 = fs.readdirSync(work); await click('[data-action="export"]'); const f = await download(had2); fs.renameSync(path.join(work, f), path.join(work, 'upgraded.json'));
-    ok(/"reports":\["listId","workerId"\],"n":0/.test(await layout()) && /"v":2/.test(await layout()), 'a stage 1 database, with its empty reports store, is re-keyed on first use', await layout()); }
-  await setup('Mike'); await click('[data-go="settings"]'); await click('[data-go="support"]');
-  await oldDb(true);
-  { const had3 = fs.readdirSync(work); await click('[data-action="export"]'); await sleep(900);
+    ok(true, 'and a backup can be made from it'); }
+  await oldPhone(true); await until('listsState==="failed"', 8000, 'lists not opened');
+  { await click('[data-action="export"]'); await sleep(900);
     const kept = await ev(`new Promise(function(res){var r=indexedDB.open('notebuiltpro');r.onsuccess=function(){var d=r.result,g=d.transaction('reports').objectStore('reports').get('L1');g.onsuccess=function(){var o={v:d.version,rec:g.result};d.close();res(JSON.stringify(o))}}})`);
-    ok(fs.readdirSync(work).length === had3.length && kept === '{"v":1,"rec":{"listId":"L1","kept":true}}', 'if that old store somehow holds a record, the upgrade stops: nothing is dropped and no backup is written without it', kept + ' ' + await text('#toast')); }
+    ok(backups().length === 0 && kept === '{"v":1,"rec":{"listId":"L1","kept":true}}', 'if that old store somehow holds a record, the upgrade stops: nothing is dropped and no backup is written without it', kept + ' ' + await text('#toast'));
+    await load('#/day'); await until('listsState==="failed"', 8000, 'lists not opened');
+    ok(/couldn\u2019t open the storage this phone keeps lists in/.test(await text('#app')) && await ev('!document.getElementById("day-jobs")'), 'and Days says it could not open the lists, and offers nothing to build on', await text('#app')); }
 
   // ---- 320px, both themes, every screen ----------------------------------------------------------
   section('320px, dark and light');
@@ -741,12 +1278,21 @@ async function run(){
   const WIDE = [['notebuiltpro.settings', JSON.stringify({ schemaVersion:2, boss:{ id:a.boss.id, name:'W'.repeat(40) } })],
     ['notebuiltpro.roster', JSON.stringify([rec(wide[0], 'W'.repeat(40), 'note', 'M'.repeat(120), NOW), rec(wide[1], 'Wolfeschlegelsteinhausenbergerdorff Sr', 'note', '+1 (555) 010-0100 · finishing carpenter', NOW, true)])],
     ['notebuiltpro.jobs', JSON.stringify([rec(wide[2], 'W'.repeat(40), 'address', 'M'.repeat(160), NOW), rec(wide[3], 'Oak St', 'address', '', NOW, true)])]];
-  await seed(WIDE);
-  const screens = [['home', '#/home'], ['crew', '#/crew'], ['jobs', '#/jobs'], ['settings', '#/settings'], ['support', '#/support'], ['privacy', '#/privacy']];
+  const WLIST = { listId:nodeId(), createdAt:NOW, updatedAt:NOW, boss:{ id:a.boss.id, name:'W'.repeat(40) }, job:{ id:wide[2], name:'W'.repeat(40) }, day:today,
+    workers:[{ id:wide[0], name:'W'.repeat(40) }],
+    tasks:['W'.repeat(200), cyr(200), cyr(200), 'Wolfeschlegelsteinhausenbergerdorff said to sweep up'].map((t, i) => ({ id:String(i + 1), worker:wide[0], text:t, order:i + 1, editedAt:NOW, gone:i === 3 ? 'cancelled' : null })), sent:{}, queue:{} };
+  const seedWide = async () => { await wipe(); await seed(WIDE); await seedLists([WLIST]); };
+  await seedWide();
+  const WDAY = '#/day/' + wide[2] + '/' + today;
+  const screens = [['home', '#/home'], ['crew', '#/crew'], ['jobs', '#/jobs'], ['days', '#/day'], ['day', WDAY], ['send', '#/send/' + wide[2] + '/' + today], ['settings', '#/settings'], ['support', '#/support'], ['privacy', '#/privacy']];
+  const settle = async name => { await listsReady();
+    if(name === 'days') await until('!!document.getElementById("day-past")', 5000, 'days drawn');
+    if(name === 'day' || name === 'task sheet') await until('document.querySelectorAll("#day-body .task").length===3', 5000, 'day drawn');
+    if(name === 'send'){ await measured(); await until('document.querySelectorAll(".part").length>=2', 5000, 'parts drawn'); } };
   for(const mode of ['dark', 'light']){
     await scheme(mode);
     for(const [name, hash] of screens){
-      await load(hash); await sleep(250);
+      await load(hash); await sleep(250); await settle(name);
       const o = await overflow(), sv = await svgs();
       ok(!o, name + ', ' + mode + ': no horizontal scroll at 320px', o);
       if(sv) ok(false, name + ': every icon is sized', sv);
@@ -760,6 +1306,12 @@ async function run(){
         await shot('10-' + name + '-sheet-' + mode + '-320'); await ev('history.back()'); await closed();
         await click('#rec-archived [data-action="rec-edit"]'); await sleep(150); const o6 = await overflow(); ok(!o6 && await ev('!!document.querySelector("[data-action=rec-unarchive]")'), name + ' archived sheet, ' + mode + ': no horizontal scroll', o6);
         await ev('history.back()'); await closed(); }
+      if(name === 'day'){
+        await click('#day-body .task-text'); await sleep(200); const o7 = await overflow(); ok(!o7 && await ev('document.querySelectorAll("#task-who-chips .chip").length===1'), 'task sheet, ' + mode + ': no horizontal scroll', o7);
+        await shot('10-task-sheet-' + mode + '-320'); await ev('history.back()'); await closed();
+        await click('#day-gone button'); await sleep(150); const o8 = await overflow(); ok(!o8 && await ev('!!document.querySelector("[data-action=task-restore]")'), 'cancelled-task sheet, ' + mode + ': no horizontal scroll', o8);
+        await ev('history.back()'); await closed(); }
+      if(name === 'send') ok((await cards())[0].parts.every(p => p.chars <= 700), 'send, ' + mode + ': a 40-character name and three long tasks split into parts that fit');
       if(name === 'settings'){ await click('[data-action="edit-name"]'); await sleep(200); const o3 = await overflow(); ok(!o3, 'name sheet, ' + mode + ': no horizontal scroll', o3); await click('[data-help="name"]'); await sleep(100); const o4 = await overflow(); ok(!o4, 'help sheet, ' + mode + ': no horizontal scroll', o4); }
       await shot('10-' + name + '-' + mode + '-320');
     }
@@ -783,11 +1335,12 @@ async function run(){
   ok(await ev('getComputedStyle(document.querySelector(".help-i")).display==="none"') && (await raw('notebuiltpro.beginner')) === 'off', 'the switch hides every marker, with its own key on this phone');
   await click('[data-action="guide"]');
   let moved = [];
-  await seed(WIDE);
+  await seedWide();
   for(const w of [320, 360, 414, 680]){
     await size(w, 740);
-    for(const [name, hash] of screens.concat([['name sheet', '#/settings'], ['worker sheet', '#/crew'], ['job sheet', '#/jobs']])){
-      await load(hash); await sleep(200);
+    for(const [name, hash] of screens.concat([['name sheet', '#/settings'], ['worker sheet', '#/crew'], ['job sheet', '#/jobs'], ['task sheet', WDAY]])){
+      await load(hash); await sleep(200); await settle(name);
+      if(name === 'task sheet'){ await click('#day-body .task-text'); await sleep(200); }
       if(name === 'name sheet'){ await click('[data-action="edit-name"]'); await sleep(150); }
       if(name === 'worker sheet' || name === 'job sheet'){ await click('#rec-list [data-action="rec-edit"]'); await sleep(200); }
       await ev('guideSet(true),true'); const on = await boxes();
@@ -798,7 +1351,7 @@ async function run(){
   }
   await wipe(); await load();
   for(const w of [320, 360, 414, 680]){ await size(w, 740); await ev('guideSet(true),true'); const on = await boxes(); await ev('guideSet(false),true'); const off = await boxes(); await ev('document.documentElement.setAttribute("data-guide","on"),localStorage.clear(),true'); if(on !== off) moved.push('first run@' + w); }
-  ok(moved.length === 0, 'nothing but the absorbing hairline moves between beginner and expert, on ten screens at four widths', moved.join(' | '));
+  ok(moved.length === 0, 'nothing but the absorbing hairline moves between beginner and expert, on fourteen screens at four widths', moved.join(' | '));
   await size(320, 568);
 
   // ---- service worker ----------------------------------------------------------------------------------

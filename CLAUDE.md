@@ -20,8 +20,8 @@ No server, no accounts. The worker side lives in Notebuilt.
 - Live: `https://pro.notebuilt.ca/` (see `CNAME`)
 - Report links arrive at `https://pro.notebuilt.ca/#report=<payload>`
 
-**Built so far: stage 2 of 4.** Shell, storage, standards, the boss's
-identity, Crew and Jobs. There are no Day, Send, Board or Reports screens yet,
+**Built so far: stage 3 of 4.** Shell, storage, standards, the boss's
+identity, Crew, Jobs, Day and Send. There are no Board or Reports screens yet,
 and Home says so. A `#report=` link is stripped from the address and answered
 with a sheet saying this build can't read reports; nothing is decoded.
 
@@ -35,7 +35,7 @@ Names are permanent (Tier 1 rule 9). Never rename them.
 | localStorage | `notebuiltpro.roster` | array of workers | yes |
 | localStorage | `notebuiltpro.jobs` | array of jobs | yes |
 | localStorage | `<key>__bak` | the previous value of that key | no |
-| IndexedDB | `notebuiltpro`, store `lists`, keyPath `listId` | nothing yet | yes |
+| IndexedDB | `notebuiltpro`, store `lists`, keyPath `listId` | one record per job's day | yes, without `queue` |
 | IndexedDB | `notebuiltpro`, store `reports`, keyPath `[listId, workerId]` | nothing yet | yes |
 | localStorage | `notebuiltpro.theme`, `.beginner`, `.lastView`, `.installPromptDismissed`, `.backupNudgeSnoozeUntil`, `.lastBackupAt` | things about this phone | no |
 
@@ -68,21 +68,26 @@ job    { id, name, address, archived, createdAt, updatedAt }
 
 ### Schema
 
-- `PRO_SCHEMA_VERSION = 2`, in `index.html`. Absent reads as 1.
+- `PRO_SCHEMA_VERSION = 3`, in `index.html`. Absent reads as 1.
   - 1: settings alone.
   - 2: adds the roster and the jobs.
-- `PRO_MIGRATIONS` is the ladder. Rung 2 converts nothing, because version 1
-  never wrote those two keys and an absent store reads as empty. It exists so
-  the number tells the builds apart. **The first rung that changes data is
-  still unwritten and untested**: it must name the store it changed in
+  - 3: adds lists, in IndexedDB.
+- `PRO_MIGRATIONS` is the ladder. Rungs 2 and 3 convert nothing, because the
+  version before never wrote what they add and an absent store reads as
+  empty. They exist so the number tells the builds apart: a stage 2 build
+  that opens stage 3 data shows its newer-version gate instead of exporting a
+  backup it believes has no lists in it. **The first rung that changes data
+  is still unwritten and untested**: it must name the store it changed in
   `proSchemaDirty`, so the save that stamps the number writes that store
   first.
 - `proApplySchema()` reads the number at load and again at every restore.
-- **The stamp** is written in `saveSettings()` and nowhere else. `commit()`,
-  the roster and jobs save, writes its data and then calls `saveSettings()`
-  if the number on the phone is behind. Both are only reached from a tap.
-  Startup reads and writes nothing: no localStorage key, no IndexedDB
-  database. The database is opened on the first export or restore.
+- **The stamp** is written in `saveSettings()` and nowhere else. `commit()`
+  (the roster and jobs save) and `listPut()` (a list save) write their data
+  and then call `saveSettings()` if the number on the phone is behind. All of
+  them are only reached from a tap. Startup writes nothing to localStorage.
+  On the first-run screen it does not touch IndexedDB either; once there is a
+  name, the first render opens the database to read the lists, which creates
+  it if it was not there.
 - **Newer data.** A stored `schemaVersion` above 2 shows a gate that says so,
   and nothing is written. The data is left exactly as found.
 - **Backup before write.** `saveStore()` copies the current value to
@@ -107,7 +112,93 @@ job    { id, name, address, archived, createdAt, updatedAt }
   upgrade counts the old store first. Empty, it is dropped and remade. If it
   holds anything, the upgrade aborts, nothing is touched, and export fails
   loudly.
-- Neither store has a record shape yet. Stages 3 and 4 define them.
+- `reports` has no record shape yet. Stage 4 defines it.
+
+### Lists
+
+One record is one job's day for the whole crew:
+
+```
+{ listId, createdAt, updatedAt, boss:{id,name}, job:{id,name}, day,
+  workers:[{id,name}],                       kept in id order
+  tasks:[{id, worker, text, order, editedAt, gone}],
+  sent:{ <workerId>:{at, ids:[taskId]} },
+  queue:{ <workerId>:{sendId, at, parts:[{link, ids:[taskId], done}]} } }
+```
+
+- `workers`, `tasks` and `sent` are the crew component's own shapes. The
+  component makes the slices, measures, splits, refuses, and keeps `sent`
+  (`sliceFor`, `split`, `recordSend`, `changesNotSent`). The app never
+  re-implements any of it.
+- **One list per job per day.** It is made, with its `listId`, by the first
+  task added. Opening a day writes nothing.
+- **A task is never removed.** Cancelling sets `gone:'cancelled'` and keeps
+  it; Bring back clears it. Reassigning changes `worker`, and the component
+  turns that into a `reassigned` tombstone in the slice of the worker it
+  left, using `sent`. The boss's own copy never holds `'reassigned'`.
+- Task ids are the component's short list-scoped counters (`nextTaskId`).
+  `order` is one sequence across the list; the screen groups by worker, so
+  only the order within a worker's tasks is ever seen. A reassigned task
+  joins the end of its new owner's tasks.
+- **Edit times.** `editStamp()` gives every edit a time later than the
+  task's last edit and later than every send on the list, so an edit made in
+  the same second as a send is never missed. That can put an edit a second
+  or two ahead of the clock, so a send is timed at the newest edit or now,
+  whichever is later.
+- **Names.** A list keeps the names it was last written with, and
+  `listLive()` swaps in the names on the phone now before anything is drawn
+  or sent. A rename in Crew, Jobs or Settings reaches the next send. A rename
+  alone does not mark anyone "changes not sent".
+- `cleanList()` / `cleanLists()` are the **one judge** of a list, for what is
+  loaded and for what a backup carries. Everything the component defines goes
+  through `EGSCrew.validate()`; `sent` and `queue` are checked by hand
+  against the list's own workers and task ids. One bad list, one `listId`
+  twice, or two lists for one job's day refuses the lot.
+- `listPut()` refuses a write that would drop a task or forget something in
+  `sent`. Every list change goes through `listEdit()`, one at a time.
+- Lists are read into memory once there is a name (`listsLoad()`).
+  `listsState` is `ready`, `failed` (the database would not open: nothing is
+  shown or changed) or `damaged` (a stored list failed the check: they are
+  left untouched, Days shows a card with Restore or a confirmed "Start again
+  with no lists", and export refuses).
+- **No `__bak` copy.** A list write is one IndexedDB put of a record that has
+  already passed `cleanList()` and the grow-only guard. Unlike the
+  localStorage keys, the previous value is not kept.
+
+### Sending
+
+- **Measured before the share sheet opens.** Opening Send calls `prepFor()`:
+  for each worker with something to send, `sliceFor()` then `split()`. The
+  result is held in memory (`_prep`) and nothing is stored. `rev` is bumped by
+  anything a measurement depends on (tasks, names), and a measurement made
+  under an older `rev` is thrown away.
+- **The three refusals (spec rule 12)** come from `split()` and are drawn on
+  that worker's card, with nothing to tap that would send: `task_too_long`
+  (names the task; "Shorten this task" opens it), `names_too_long` (names
+  the name; "Shorten this name" opens its sheet) and `cannot_fit` (said
+  plainly; unreachable with today's limits and kept as a guard). Other
+  workers are not blocked.
+- **`queue`** is a send that has started. The tap on Send starts the write
+  and asks for the share sheet in the same breath, without waiting for the
+  write: a browser only opens the sheet straight from a tap, and the write
+  has to be under way before the phone can close the app behind the sheet.
+  So the links of one send keep one `sendId` across a restart. A part is
+  ticked when the share sheet resolves; backing out ticks nothing; with no
+  share sheet the text is copied and the tick is left to the boss. A tick can
+  be taken back. The queue button shows how many people are sent.
+- **Sent only when every part is ticked.** Each tick adds what that part
+  carried to `sent[worker].ids` at once (so a tombstone can follow it even
+  if the send is never finished) and leaves `at` alone. When the last part
+  is ticked, `at` becomes the time the links were measured and the queue
+  entry goes.
+- Any change to a worker's tasks drops that worker's queue: its links no
+  longer say what the list says. The next send is a new send with a new
+  `sendId`, and the worker's phone follows the newest.
+- The text shared is one line (`<boss>: tasks for <job>, <day>`, with the
+  part number when there is more than one) and the link on the next line.
+- Measured in the test run: ten ordinary tasks (about 45 characters each)
+  with short names come to about 670 characters, one part. An eleventh would
+  split. Eight 200-character Cyrillic tasks go as eight parts.
 
 ### Backup file
 
@@ -115,21 +206,28 @@ job    { id, name, address, archived, createdAt, updatedAt }
 
 ```
 { app:"notebuilt-pro", kind:"backup", version:1, exportedAt, appVersion,
-  settings, roster:[...], jobs:[...], crew:{ lists:[], reports:[] } }
+  settings, roster:[...], jobs:[...], crew:{ lists:[...], reports:[] } }
 ```
 
 `readBackup()` treats the file as untrusted: 5 MB cap, strict shape, the boss
 checked by the crew component, the roster and jobs through `cleanRecords()`,
-the whole file refused on any bad field. A file with no `crew` section leaves
-the phone's lists and reports alone.
+the lists through `cleanLists()`, the whole file refused on any bad field. A
+file with no `crew` section leaves the phone's lists and reports alone.
 
-**This build still refuses any backup whose lists or reports are not empty.**
-Those records have no shape yet. Stages 3 and 4 must replace that refusal with
-a real check before they store or draw a restored record.
+A backup carries every list with its `sent` map and **without `queue`**: the
+links of a half-finished send belong to the phone that started it. Export
+drops the queue and restore ignores one a file carries. After a restore, a
+worker who was mid-send shows what they were given and "changes not sent".
 
-A restore replaces settings, roster and jobs together, crew and jobs first and
-the stamped settings last. If a write fails, the ones already made are put
-back. It asks first whenever there is anything on the phone to replace, and
+**This build still refuses any backup whose reports are not empty.** Reports
+have no shape yet. Stage 4 must replace that refusal with a real check before
+it stores or draws a restored report.
+
+A restore replaces lists, roster, jobs and settings together: lists first,
+then crew and jobs, and the stamped settings last. If a write fails, the ones
+already made are put back, the lists included. Lists on the phone count as
+something to replace even when they have not been read (no name yet) or could
+not be (damaged): the restore counts them in storage before it asks. It asks first whenever there is anything on the phone to replace, and
 the question says what the file holds.
 
 ## Boss identity and the name check
@@ -168,19 +266,26 @@ is asked once there is a name, and again after each worker or job is added.
 
 ## Structure
 
-- One file, `index.html`, about 2,470 lines. No build step, no framework.
+- One file, `index.html`, about 3,290 lines. No build step, no framework.
 - Script blocks, in order: version stamp, theme pre-paint, the crew component,
   the app, service-worker registration.
 - `gate()` decides whether a gate owns the screen: `future`, `damaged`,
   `setup`, or none. A gate is not a view and has no history.
-- Views: `home`, `crew`, `jobs`, `settings`, `support`, `privacy`, switched by
-  `view`. Crew and Jobs are one renderer and one sheet (`renderRecords`,
-  `openRecord`, `saveRecord`, `setArchived`), driven by the `KINDS` and `UI`
-  tables.
+- Views: `home`, `crew`, `jobs`, `day`, `settings`, `support`, `privacy`,
+  switched by `view`. Crew and Jobs are one renderer and one sheet
+  (`renderRecords`, `openRecord`, `saveRecord`, `setArchived`), driven by the
+  `KINDS` and `UI` tables.
+- Two more views are about one job's day and carry it in the route:
+  `day/<jobId>/<YYYY-MM-DD>` builds the list (`renderList`) and
+  `send/<jobId>/<YYYY-MM-DD>` sends it (`renderSend`). `navValid()` accepts
+  such a route only for a job on this phone and a day the component accepts;
+  anything else is Home. `day` alone is the picker (`renderDays`).
+- On the Day screen, adding a task redraws only `#day-body`, never the field,
+  so the keyboard stays up between tasks.
 - `render()` rebuilds `#app` from template strings. It has no storage side
   effects.
-- Every piece of user content passes through `esc()`: the boss's name, and
-  each worker's and job's name, note and address.
+- Every piece of user content passes through `esc()`: the boss's name, each
+  worker's and job's name, note and address, and every task's text.
 - Events are delegated: one listener each for click, input, keydown and
   change. No inline handlers. `[data-go]`, `[data-back]`, `[data-share-app]`,
   `[data-pay-tab]`, `[data-copy]` and `[data-help]` are attribute hooks;
@@ -193,8 +298,11 @@ is asked once there is a name, and again after each worker or job is added.
   (`closeSheet(true)`). A refused back re-pushes the sheet's history entry,
   the one place an entry is re-pushed, because the phone's back can only be
   undone, not refused. A link tapped into the app mid-edit is stripped from
-  the address and the sheet is left as it was. The first-run name field is
-  not a sheet and is not covered.
+  the address and the sheet is left as it was. In the task sheet, picking a
+  different person counts as typing. The Day screen's own field is not in a
+  sheet, so `leaveOk()` covers it the same way: leaving with a task typed and
+  not added asks first, and a "no" steps back onto the entry just left. The
+  first-run name field is not covered.
 - **Back.** `popstate` is the only back path; the header arrow calls
   `history.back()`. The stack is guard, Home, deeper views, then the open
   sheet. A sheet owns an entry while it is open. Every history change queues
@@ -235,7 +343,7 @@ The file carries nine of the ten core `EGS-STD:` markers, plus `support`.
 
 ## Tests
 
-`node test_pro.js` — 282 checks, all passing. It serves this folder on
+`node test_pro.js` — 468 checks, all passing. It serves this folder on
 `127.0.0.1:8708` and drives real headless Chrome over CDP on real time.
 `--shots <dir>` also writes screenshots; `--bail` stops at the first failure.
 
@@ -245,14 +353,29 @@ Covered: cold open with empty storage, the name check in all three roles,
 first run, restart, the schema stamp and a phone coming up from schema 1,
 Crew and Jobs (add, edit, sort, archive, bring back, refusals, escaping),
 unsaved typing on every way out of a sheet,
-damaged and newer stored data, export and restore round trip with crew and
-jobs, 33 hostile backup files, back and the hash, share, the install banner
-and each nudge trigger, the IndexedDB layout and its upgrade, 320px in both
-themes on every screen and sheet, beginner mode reflow on ten screens at four
-widths, and the service worker including a reload with the server gone.
+Day (add, refusals, reorder, reword, reassign, cancel, bring back, restart),
+Send (one part for a realistic list, a worst-case split with every link
+decoded, ticks, a restart mid-queue, backing out of the share sheet, no share
+sheet at all, who is marked after each kind of edit, a resend merged on the
+worker's side through the component), each of the three refusals,
+damaged and newer stored data, export and restore round trip with crew, jobs
+and lists, 33 hostile backup files and 27 hostile lists, damaged lists, back
+and the hash, share, the install banner and each nudge trigger, the IndexedDB
+layout and its upgrade, 320px in both themes on every screen and sheet,
+beginner mode reflow on fourteen screens at four widths, and the service
+worker including a reload with the server gone.
+
+The third refusal cannot be reached with today's limits, so its test makes
+the component say it and checks what the app then shows.
 
 Not covered:
-- A real phone, for this stage. Stage 1 was checked on a device on Oct 12.
+- A real phone, for this stage. Stages 1 and 2 were checked on a device.
+- **The real share sheet, and a real text message.** The test replaces
+  `navigator.share`. Whether a link arrives whole and tappable is a phone
+  test.
+- The worker's side. Notebuilt cannot open a `#crew=` link yet, so a list
+  sent from this build has nowhere to land until that is built. The merge is
+  tested through the component, not through Notebuilt.
 - The install prompt itself (`beforeinstallprompt` does not fire headless) and
   the iOS wording of that banner.
 - An update arriving while the app is open (the refresh banner and the
@@ -270,7 +393,20 @@ Not covered:
 ## Gotchas
 
 - `test_pro.js` uses port 8708. A service worker left on a shared port serves
-  the wrong app, so don't reuse it.
+  the wrong app, so don't reuse it. (`NBPRO_TEST_PORT` overrides it, for
+  mutation runs side by side.)
+- The test resets the tab's history before every cold open. Chrome keeps 50
+  entries and, when full, drops entries made without a tap first, which under
+  a script is every entry the app seeds. Without the reset a `back` late in
+  the run falls out of the app.
+- The test starts Chrome with component updates off. A fresh profile fetches
+  them in the background and they land in the download folder the test
+  watches.
+- **A task that has left a worker still marks them when it is edited.** The
+  component's `changesNotSent()` counts any task a worker was ever given.
+  Reword a task after giving it from Joe to Maria and Joe shows "changes not
+  sent" again, although his copy only needs the tombstone he already has.
+  The rule is the component's; it is not worked around here.
 - A cold open restores the last screen from `notebuiltpro.lastView`. Tests
   that need Home load `#/home`.
 - The beginner-mode test ignores `.rule`: that hairline exists to give up the

@@ -27,7 +27,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <!-- EGS-STD:coldopen-version -->
-<script>window.EGS_VERSION = '2026.10.12-1411 (068d955)';</script>
+<script>window.EGS_VERSION = '2026.10.12-1648 (aabf331)';</script>
 <title>Notebuilt Pro</title>
 <meta name="description" content="Task lists for a crew, sent by text. Private, on-device, by EGS.">
 <!-- EGS-STD:themes — this script runs BEFORE the stylesheet so the first paint
@@ -208,6 +208,32 @@
   .field-msg:empty{display:none}
   .field-msg.warn{color:var(--brass)}
   .field-msg.bad{color:var(--danger)}
+
+  /* ---- Day and Send ---- */
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+  .chip{max-width:100%;min-height:40px;padding:7px 14px;border-radius:999px;border:1px solid var(--line-strong);
+    color:var(--paper);font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip.on{background:var(--brass-fill);border-color:var(--brass-fill);color:var(--on-brass);font-weight:600}
+  .grp{display:flex;align-items:center;gap:8px;margin:18px 0 8px}
+  .grp .who{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pill{flex:none;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
+    padding:3px 8px;border-radius:999px;border:1px solid var(--line-strong);color:var(--paper-dim);white-space:nowrap}
+  .pill[data-state="sent"]{border-color:var(--done);color:var(--done)}
+  .pill[data-state="changed"],.pill[data-state="part"]{border-color:var(--brass);color:var(--brass)}
+  .list > .task{gap:2px;padding:4px 4px 4px 14px}
+  .task .task-text{flex:1;min-width:0;min-height:46px;padding:8px 8px 8px 0;text-align:left}
+  .task .mv{flex:none;width:40px;height:46px;display:inline-flex;align-items:center;justify-content:center;
+    border-radius:10px;color:var(--paper-dim)}
+  .task .mv:active{background:var(--ink-2)}
+  .task .mv[disabled]{opacity:.3}
+  .task .mv svg{width:18px;height:18px}
+  .gone-text{text-decoration:line-through;color:var(--paper-dim)}
+  .send-w .grp{margin:0}
+  .part{display:flex;align-items:center;gap:10px;margin-top:10px}
+  .tick{flex:none;width:44px;height:44px;border-radius:50%;border:2px solid var(--line-strong);display:inline-flex;
+    align-items:center;justify-content:center;color:transparent}
+  .tick svg{width:20px;height:20px}
+  .tick[aria-pressed="true"]{background:var(--done);border-color:var(--done);color:var(--ink)}
 
   /* ---- Segmented control and switch: fixed boxes, nothing reflows ---- */
   .seg{display:flex;border:1px solid var(--line-strong);border-radius:var(--radius-sm);overflow:hidden}
@@ -1059,13 +1085,12 @@
 /* =============================================================================
    Notebuilt Pro app logic. Copyright (c) 2026 EGS. All rights reserved.
 
-   Stage 2 of the phase 1 build: shell, storage, standards, boss identity,
-   Crew and Jobs. Day, Send, Board and Reports are later stages and are not
-   here.
+   Stage 3 of the phase 1 build: shell, storage, standards, boss identity,
+   Crew, Jobs, Day and Send. Board and Reports are stage 4 and are not here.
 
    The crew-task component above (EGSCrew) is a byte-identical copy of the
-   platform's. It owns ids, limits, the codec and the measuring. Nothing in
-   this file re-implements any of that.
+   platform's. It owns ids, limits, the codec, the measuring, the splitting
+   and the send-time refusals. Nothing in this file re-implements any of that.
    ============================================================================= */
 
 const APP_NAME = 'Notebuilt Pro';   /* change here + in manifest.webmanifest + <title> to rename */
@@ -1101,7 +1126,7 @@ const PAYMENT_TABS = [
 ];
 let supportTab = 'interac';
 const SHARE_APP_LINE = 'Notebuilt Pro — task lists for a crew, sent by text. Private, offline, yours.';
-const APP_BACKUP_DESC = "A backup is one file holding everything this app keeps: your name, your permanent ID, your crew and your jobs, and later your lists. Keep it somewhere that isn't this phone. Restoring it on a new phone brings back the same ID, so lists you've already sent still match.";
+const APP_BACKUP_DESC = "A backup is one file holding everything this app keeps: your name, your permanent ID, your crew, your jobs and your lists. Keep it somewhere that isn't this phone. Restoring it on a new phone brings back the same ID, so lists you've already sent still match.";
 const APP_MONETIZATION = {
   model: 'free',
   blurb: "Notebuilt Pro is free while it's being tried out on real jobs. When it gets a price, it will be a one-time price: no subscription, and nothing you've made will be held back."
@@ -1129,7 +1154,10 @@ const I = {
   chevronR:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>',
   gear:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.6M12 18.6v2.6M2.8 12h2.6M18.6 12h2.6M5.5 5.5l1.8 1.8M16.7 16.7l1.8 1.8M18.5 5.5l-1.8 1.8M7.3 16.7l-1.8 1.8"/></svg>',
   download:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>',
-  upload:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V5M7 9l5-5 5 5M5 20h14"/></svg>'
+  upload:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V5M7 9l5-5 5 5M5 20h14"/></svg>',
+  up:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15l7-7 7 7"/></svg>',
+  down:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l7 7 7-7"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>'
 };
 function ico(name){ return '<span class="ico">'+I[name]+'</span>'; }
 
@@ -1252,7 +1280,7 @@ async function nameCheck(raw, role, excludeId, given){
        file, never the phone.
 
    They are never compared and never assigned across. */
-const PRO_SCHEMA_VERSION = 2;
+const PRO_SCHEMA_VERSION = 3;
 
 /* The ladder — the registration point. The key is the version being migrated
    TO, and the function takes the stored shape from key-1 up to key, in
@@ -1265,16 +1293,22 @@ const PRO_SCHEMA_VERSION = 2;
    never named: saveSettings IS the save doing the flushing.
 
    Version 1 was settings alone: {schemaVersion, boss:{id, name}}.
-   Version 2 adds the roster and the jobs, each an array of records. */
+   Version 2 adds the roster and the jobs, each an array of records.
+   Version 3 adds lists, in IndexedDB: one record per job's day. */
 const PRO_MIGRATIONS = {
   /* 1 -> 2: nothing to convert. Version 1 never wrote the roster or the jobs,
      and an absent store reads as empty, so the data is already in shape.
      The rung is here so the number tells the two builds apart: a version 1
      build that somehow opens version 2 data shows its newer-version gate
-     instead of carrying on. The next rung is the first that changes data,
-     and it names the store it changed:
-       3: function(){ roster.forEach(function(w){ ... }); proSchemaDirty.add('roster'); } */
-  2: function(){}
+     instead of carrying on. */
+  2: function(){},
+  /* 2 -> 3: nothing to convert either. Version 2 never wrote a list, and an
+     empty store reads as no lists. The number moves so a version 2 build
+     shows its gate rather than exporting a backup it believes has no lists
+     in it. The next rung is the first that changes data, and it names the
+     store it changed:
+       4: function(){ roster.forEach(function(w){ ... }); proSchemaDirty.add('roster'); } */
+  3: function(){}
 };
 const proSchemaDirty = new Set();
 
@@ -1494,6 +1528,319 @@ async function idbReplace(crew){
     });
   } finally { db.close(); }
 }
+async function idbPutList(rec){
+  const db = await idbOpen();
+  try{
+    await new Promise((resolve, reject)=>{
+      const tx = db.transaction('lists','readwrite');
+      tx.objectStore('lists').put(rec);
+      tx.oncomplete = ()=>resolve(); tx.onerror = ()=>reject(tx.error); tx.onabort = ()=>reject(tx.error);
+    });
+  } finally { db.close(); }
+}
+async function idbClearLists(){
+  const db = await idbOpen();
+  try{
+    await new Promise((resolve, reject)=>{
+      const tx = db.transaction('lists','readwrite');
+      tx.objectStore('lists').clear();
+      tx.oncomplete = ()=>resolve(); tx.onerror = ()=>reject(tx.error); tx.onabort = ()=>reject(tx.error);
+    });
+  } finally { db.close(); }
+}
+
+/* ============================================================
+   Lists — one record is one job's day, for the whole crew (spec §4)
+   ============================================================
+   { listId, createdAt, updatedAt, boss:{id,name}, job:{id,name}, day,
+     workers:[{id,name}], tasks:[{id, worker, text, order, editedAt, gone}],
+     sent:{ <workerId>:{at, ids:[taskId…]} },
+     queue:{ <workerId>:{sendId, at, parts:[{link, ids:[taskId…], done}]} } }
+
+   workers, tasks and sent are the component's own shapes, and the component
+   reads and writes them. `sent` is what each worker has been given: it is
+   what lets a resend carry a tombstone. `queue` is a send that has started
+   and not finished: the exact links, so every part of one send goes out
+   under one sendId even if the app is closed halfway through.
+
+   A task is never removed. Cancelling sets gone:'cancelled' and keeps it;
+   reassigning changes its worker, and the component turns that into a
+   tombstone in the slice of the worker it left.
+
+   cleanList is the ONE judge of a list, for what is loaded from this phone
+   and for what a backup carries. Everything the component defines goes
+   through the component's validator; the rest is checked here. It returns
+   the record in a fixed key order, with unknown keys dropped, or null. A
+   backup never carries a half-finished send, so a file's queue is dropped. */
+const LISTS_MAX = 5000;
+const PARTS_MAX = EGSCrew.LIMITS.tasks + EGSCrew.LIMITS.workers;
+const SEND_ID_RE = /^[A-Za-z0-9_-]{8}$/;
+function cleanList(o, fromFile){
+  if(!isObj(o) || typeof o.listId!=='string' || !timeOk(o.createdAt) || !timeOk(o.updatedAt) || !isObj(o.sent)) return null;
+  const v = EGSCrew.validate({ f:EGSCrew.FORMAT, v:EGSCrew.VERSION, k:'list', listId:o.listId, issuedAt:1790000000,
+    sendId:PROBE.send, part:1, parts:1, boss:o.boss, job:o.job, day:o.day, mode:'crew', workers:o.workers, tasks:o.tasks }, 'list');
+  if(!v.ok) return null;
+  const L = v.value, wids = new Set(L.workers.map(w=>w.id)), tids = new Set(L.tasks.map(t=>t.id));
+  /* 'reassigned' is only ever made for a slice. The boss's own copy never holds it. */
+  if(L.tasks.some(t=>t.gone==='reassigned')) return null;
+  const idList = a=>Array.isArray(a) && a.length<=tids.size && a.every(i=>typeof i==='string' && tids.has(i)) && new Set(a).size===a.length;
+  const sent = {};
+  for(const wid of Object.keys(o.sent).sort()){
+    const s = o.sent[wid];
+    if(!wids.has(wid) || !isObj(s) || !timeOk(s.at) || !idList(s.ids)) return null;
+    sent[wid] = { at:s.at, ids:s.ids.slice().sort() };
+  }
+  const queue = {};
+  if(!fromFile && o.queue!==undefined){
+    if(!isObj(o.queue)) return null;
+    for(const wid of Object.keys(o.queue).sort()){
+      const q = o.queue[wid];
+      if(!wids.has(wid) || !isObj(q) || typeof q.sendId!=='string' || !SEND_ID_RE.test(q.sendId) || !timeOk(q.at) || q.at<1
+         || !Array.isArray(q.parts) || !q.parts.length || q.parts.length>PARTS_MAX) return null;
+      const parts = [];
+      for(const p of q.parts){
+        if(!isObj(p) || typeof p.link!=='string' || p.link.length>EGSCrew.SAFE_LINK_CHARS || p.link.indexOf(EGSCrew.LINK.list)!==0
+           || !EGSCrew.fromHash('#crew='+p.link.slice(EGSCrew.LINK.list.length), 'list') || !idList(p.ids) || typeof p.done!=='boolean') return null;
+        parts.push({ link:p.link, ids:p.ids.slice(), done:p.done });
+      }
+      queue[wid] = { sendId:q.sendId, at:q.at, parts:parts };
+    }
+  }
+  return { listId:L.listId, createdAt:o.createdAt, updatedAt:o.updatedAt, boss:L.boss, job:L.job, day:L.day,
+    workers:L.workers.slice().sort((a,b)=>a.id<b.id ? -1 : a.id>b.id ? 1 : 0),
+    tasks:L.tasks.slice().sort(taskOrder), sent:sent, queue:queue };
+}
+function taskOrder(a, b){ return a.order-b.order || parseInt(a.id,36)-parseInt(b.id,36); }
+function cleanLists(arr, fromFile){
+  if(!Array.isArray(arr) || arr.length>LISTS_MAX) return null;
+  const ids = new Set(), days = new Set(), out = [];
+  for(const o of arr){
+    const r = cleanList(o, fromFile);
+    /* One bad list, one id twice, or two lists for one job's day refuses the lot. */
+    if(!r || ids.has(r.listId) || days.has(r.job.id+'|'+r.day)) return null;
+    ids.add(r.listId); days.add(r.job.id+'|'+r.day); out.push(r);
+  }
+  return out;
+}
+
+/* Lists are read once there is a name, never on the first-run screen, and
+   kept in memory. idle -> loading -> ready, or:
+     failed  — the database would not open. Nothing is shown or changed.
+     damaged — a stored list failed the check. They are left untouched. */
+let lists = [];
+let listsState = 'idle';
+/* Bumped by anything a measured send depends on: a list's tasks, and the
+   names. A measurement made under an older number is thrown away. */
+let rev = 0;
+function listsNeed(){ if(listsState==='idle'){ listsState = 'loading'; listsLoad(); } }
+async function listsLoad(){
+  let got = null, state = 'failed';
+  try{ got = cleanLists((await idbDump()).lists, false); state = got ? 'ready' : 'damaged'; }
+  catch(e){ console.warn('Notebuilt Pro: could not read the lists', e); }
+  lists = got || []; listsState = state; rev++;
+  if(!gate()) render();
+}
+function listFind(jobId, day){ return lists.find(l=>l.job.id===jobId && l.day===day) || null; }
+/* The names a list goes out under are the ones on this phone now: a rename
+   in Crew, Jobs or Settings reaches the next send. The ids never move. */
+function nameRefresh(o){
+  if(hasIdentity(settings) && settings.boss.id===o.boss.id) o.boss.name = settings.boss.name;
+  const j = jobs.find(x=>x.id===o.job.id); if(j) o.job.name = j.name;
+  o.workers.forEach(w=>{ const r = roster.find(x=>x.id===w.id); if(r) w.name = r.name; });
+  return o;
+}
+function listLive(rec){ return nameRefresh(JSON.parse(JSON.stringify(rec))); }
+/* Put a list down. `quiet` is for a write that changes no task and no name:
+   a tick, or a send being started. */
+async function listPut(next, quiet){
+  if(listsState!=='ready' || schemaFromFuture) return false;
+  const rec = cleanList(next, false);
+  if(!rec) return false;
+  const old = lists.find(l=>l.listId===rec.listId) || null;
+  if(old){
+    /* A list only grows: a task is cancelled, never removed, and what a
+       worker has been given is never forgotten. A write that would drop
+       either is a bug or a wipe. */
+    const ids = new Set(rec.tasks.map(t=>t.id));
+    if(old.tasks.some(t=>!ids.has(t.id))
+       || Object.keys(old.sent).some(w=>!rec.sent[w] || old.sent[w].ids.some(i=>rec.sent[w].ids.indexOf(i)<0))){
+      console.warn('Notebuilt Pro: refused a list write that would drop a task or a sent record');
+      return false;
+    }
+  } else if(listFind(rec.job.id, rec.day)) return false;
+  try{ await idbPutList(rec); }catch(e){ console.warn('Notebuilt Pro: list save failed', e); return false; }
+  lists = old ? lists.map(l=>l.listId===rec.listId ? rec : l) : lists.concat([rec]);
+  if(!quiet) rev++;
+  if(settings.schemaVersion!==proSchemaReached) saveSettings();
+  return true;
+}
+/* One list change at a time, each built on the last one written. */
+let _listQ = Promise.resolve();
+const SAVE_FAIL = 'I couldn’t save that on this phone. Nothing was changed.';
+const NOTHING = 'nothing';     /* a change that turned out to change nothing: not an error, not a write */
+/* change(rec, now) edits a copy and returns null, NOTHING, or a sentence
+   saying why not. Resolves the same way: null means it was written. */
+function listEdit(jobId, day, change, quiet){
+  const p = _listQ.then(async ()=>{
+    if(listsState!=='ready') return 'I can’t read the lists on this phone, so I didn’t change anything.';
+    const old = listFind(jobId, day), job = jobs.find(j=>j.id===jobId), t = nowSec();
+    if(!old && (!job || !dayOk(day) || !hasIdentity(settings))) return SAVE_FAIL;
+    const rec = old ? JSON.parse(JSON.stringify(old))
+      : { listId:EGSCrew.newId(), createdAt:t, updatedAt:t, boss:{ id:settings.boss.id, name:settings.boss.name },
+          job:{ id:job.id, name:job.name }, day:day, workers:[], tasks:[], sent:{}, queue:{} };
+    const why = change(rec, t);
+    if(why) return why;
+    rec.updatedAt = Math.max(t, rec.updatedAt); nameRefresh(rec);
+    return (await listPut(rec, quiet)) ? null : SAVE_FAIL;
+  });
+  _listQ = p.catch(()=>{});
+  return p;
+}
+
+/* ---------- tasks: the boss's fields (text, order, worker, gone) ---------- */
+/* The time an edit carries. It is later than the task's last edit, and later
+   than every send on this list, so "edited since their last send" can never
+   miss an edit made in the same second as the send. */
+function editStamp(rec, prev, now){
+  let floor = prev||0;
+  Object.keys(rec.sent).forEach(w=>{ floor = Math.max(floor, rec.sent[w].at); });
+  Object.keys(rec.queue).forEach(w=>{ floor = Math.max(floor, rec.queue[w].at); });
+  return EGSCrew.stamp(floor, now);
+}
+/* The component is the only judge of what task text is. */
+function taskTextCheck(raw){
+  const text = String(raw==null ? '' : raw).trim();
+  if(!text) return { ok:false, msg:'Type the task first.' };
+  const v = EGSCrew.validate(probeList({ boss:'A', job:'A', worker:'A' }, text), 'list');
+  if(v.ok) return { ok:true, text:text };
+  const d = v.detail || '';
+  return { ok:false, msg:d.indexOf('too long')>=0 ? 'A task can be up to '+EGSCrew.LIMITS.text+' characters. This one is '+Array.from(text).length+'.'
+    : d.indexOf('markup')>=0 ? 'A task can’t contain markup like <b>.'
+    : d.indexOf('forbidden')>=0 ? 'A task can’t contain line breaks or control characters.' : 'That task doesn’t check out.' };
+}
+/* Put a worker on the list if they are not on it. Only someone still on the
+   crew can be given a task; whoever already holds one stays as they are. */
+function listSeat(rec, wid){
+  if(rec.workers.some(x=>x.id===wid)) return null;
+  const w = roster.find(x=>x.id===wid && !x.archived);
+  if(!w) return 'Pick who it’s for.';
+  if(rec.workers.length>=EGSCrew.LIMITS.workers) return 'One day’s list holds up to '+EGSCrew.LIMITS.workers+' people.';
+  rec.workers.push({ id:w.id, name:w.name });
+  return null;
+}
+function lastOrder(rec){ return rec.tasks.reduce((m,x)=>Math.max(m, x.order), 0); }
+function taskAdd(rec, now, text, wid){
+  if(!roster.some(x=>x.id===wid && !x.archived)) return 'Pick who it’s for.';
+  if(rec.tasks.length>=EGSCrew.LIMITS.tasks) return 'One day’s list holds up to '+EGSCrew.LIMITS.tasks+' tasks, counting cancelled ones.';
+  const why = listSeat(rec, wid); if(why) return why;
+  rec.tasks.push({ id:EGSCrew.nextTaskId(rec), worker:wid, text:text, order:lastOrder(rec)+1, editedAt:editStamp(rec, 0, now), gone:null });
+  delete rec.queue[wid];
+  return null;
+}
+function taskChange(rec, now, tid, text, wid){
+  const k = rec.tasks.find(x=>x.id===tid);
+  if(!k || k.gone) return 'That task isn’t on the list any more.';
+  if(k.text===text && k.worker===wid) return NOTHING;
+  if(k.worker!==wid){
+    const why = listSeat(rec, wid); if(why) return why;
+    /* A send to either of them that has started is now out of date. */
+    delete rec.queue[wid];
+    k.order = lastOrder(rec)+1;                  /* it joins the end of the new person's tasks */
+  }
+  delete rec.queue[k.worker];
+  k.text = text; k.worker = wid; k.editedAt = editStamp(rec, k.editedAt, now);
+  return null;
+}
+function taskGone(rec, now, tid, flag){
+  const k = rec.tasks.find(x=>x.id===tid);
+  if(!k || !!k.gone===flag) return NOTHING;
+  k.gone = flag ? 'cancelled' : null; k.editedAt = editStamp(rec, k.editedAt, now);
+  delete rec.queue[k.worker];
+  return null;
+}
+function taskMove(rec, now, tid, dir){
+  const k = rec.tasks.find(x=>x.id===tid);
+  if(!k || k.gone) return NOTHING;
+  const mine = rec.tasks.filter(x=>x.worker===k.worker && !x.gone).sort(taskOrder), other = mine[mine.indexOf(k)+dir];
+  if(!other) return NOTHING;
+  if(k.order===other.order){
+    /* Two tasks on one order number can only come from a file. Number the
+       whole list as it is shown, then swap. */
+    rec.tasks.slice().sort(taskOrder).forEach((x,i)=>{ if(x.order!==i+1){ x.order = i+1; x.editedAt = editStamp(rec, x.editedAt, now); delete rec.queue[x.worker]; } });
+  }
+  const o = k.order; k.order = other.order; other.order = o;
+  k.editedAt = editStamp(rec, k.editedAt, now); other.editedAt = editStamp(rec, other.editedAt, now);
+  delete rec.queue[k.worker];
+  return null;
+}
+
+/* ---------- sending: who has what ---------- */
+/* Everyone a list has something for: a live task, something already given
+   (which a tombstone may have to follow), or a send in progress. */
+function sendWorkers(rec){
+  const on = new Set();
+  rec.tasks.forEach(t=>{ if(!t.gone) on.add(t.worker); });
+  Object.keys(rec.sent).forEach(w=>{ if(rec.sent[w].ids.length) on.add(w); });
+  Object.keys(rec.queue).forEach(w=>on.add(w));
+  return rec.workers.filter(w=>on.has(w.id)).sort(byName);
+}
+/* new — nothing has gone to them. changed — something has, and the list has
+   moved since. part — a send has started. sent — they have everything.
+   A worker counts as sent only when every part of the send is ticked. */
+function sendState(rec, wid){
+  const q = rec.queue[wid], s = rec.sent[wid];
+  if(q) return { k:'part', done:q.parts.filter(p=>p.done).length, parts:q.parts.length };
+  if(!s || EGSCrew.changesNotSent(rec, wid, rec.sent)) return { k:(s && s.ids.length) ? 'changed' : 'new' };
+  return { k:'sent', at:s.at };
+}
+function sendPill(st){
+  const label = st.k==='sent' ? 'Sent '+sentLabel(st.at) : st.k==='changed' ? 'Changes not sent'
+    : (st.k==='part' && st.done) ? st.done+' of '+st.parts+' sent' : 'Not sent';
+  return '<span class="pill" data-state="'+st.k+'">'+esc(label)+'</span>';
+}
+function sentLabel(at){
+  const d = new Date(at*1000), n = new Date();
+  return d.toDateString()===n.toDateString() ? d.toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' })
+    : d.toLocaleDateString(undefined, { month:'short', day:'numeric' });
+}
+function dayLabel(day){
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day); if(!m) return '';
+  return new Date(+m[1], +m[2]-1, +m[3]).toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
+}
+function partLabel(name, i, n){ return name+'’s list'+(n>1 ? ', part '+(i+1)+' of '+n : ''); }
+
+/* Measured before the share sheet opens (spec §5, rule 12). For every worker
+   with something to send, the component builds their private slice and
+   split() turns it into the fewest links that each fit, or refuses with its
+   cause. The result waits here until Send is tapped; nothing is stored. */
+const _prep = { key:'', rev:-1, busy:false, by:{}, force:{} };
+function prepFor(stored){
+  if(_prep.key===stored.listId && _prep.rev===rev) return;
+  if(_prep.key!==stored.listId){ _prep.by = {}; _prep.force = {}; }
+  _prep.key = stored.listId; _prep.rev = rev; _prep.busy = true;
+  const key = stored.listId, mine = rev, live = listLive(stored);
+  (async ()=>{
+    const by = {};
+    /* Not before the newest edit: an edit can carry a time a second or two
+       ahead of the clock, and the send has to count as covering it. */
+    const at = live.tasks.reduce((m,t)=>Math.max(m, t.editedAt), nowSec());
+    for(const w of sendWorkers(live)){
+      if(live.queue[w.id]) continue;
+      if(!_prep.force[w.id] && !EGSCrew.changesNotSent(live, w.id, live.sent)) continue;
+      let r;
+      try{
+        const slice = EGSCrew.sliceFor(live, w.id, live.sent, at);
+        r = await EGSCrew.split(slice);
+        if(r.ok) r = { ok:true, sendId:r.sendId, at:slice.issuedAt,
+          parts:r.parts.map(p=>({ link:p.link, ids:p.value.tasks.filter(t=>!t.gone).map(t=>t.id), done:false })) };
+      }catch(e){ r = { ok:false, code:'invalid', reason:EGSCrew.REASONS.invalid }; }
+      by[w.id] = r;
+    }
+    if(_prep.key!==key || mine!==rev) return;          /* the list moved on while this was measuring */
+    _prep.by = by; _prep.busy = false;
+    if(!gate() && routeOf(view).base==='send') render();
+  })();
+}
 
 /* ============================================================
    EGS-STD:themes — day, night, and follow-the-phone
@@ -1553,9 +1900,30 @@ const HELP_COPY = {
   guide:{ title:'Beginner mode',
     body:['The small (i) markers explain what things do. Turn Beginner mode off once you know your way around and they all disappear; nothing else changes.',
           'This is saved on this phone only. It isn’t part of a backup.'] },
-  today:{ title:'Setting up',
-    body:['Add the people you send lists to, and the jobs you send them for. Each gets a permanent ID the first time you save it.',
-          'The day\u2019s lists and sending arrive in the next build.'] },
+  today:{ title:'Lists',
+    body:['A list is one job\u2019s day: the tasks, and who each one is for. Build it under Days, then send it.',
+          'Each person gets their own private link by text, with only their own tasks in it.',
+          'First add the people you send lists to, and the jobs you send them for, under Set up.',
+          'Reading the reports that come back arrives in the next build.'] },
+  days:{ title:'Building a day',
+    body:['Pick the day, then tap the job. That opens the list for that job on that day, and makes it the first time you add a task.',
+          'One job has one list per day. Opening the same job and day again takes you back to it.',
+          'Days so far are listed underneath, newest first.'] },
+  day:{ title:'Tasks',
+    body:['Tap who the task is for, type it, and add it. The name stays picked, so a run of tasks for one person is quick.',
+          'Tap a task to change its words or give it to someone else. The arrows move it up and down that person\u2019s list.',
+          'Cancelling a task keeps it and marks it cancelled, so the person who had it is told on the next send. Giving it to someone else tells both of them.',
+          'A task can be up to 200 characters.'] },
+  task:{ title:'Changing a task',
+    body:['Change the words, or tap another name to give it to someone else.',
+          'If this task has already been sent, the change isn\u2019t on anyone\u2019s phone until you send again. The Day screen shows who has changes not sent.',
+          'Cancelling asks first, and nothing is deleted. You can bring a cancelled task back.'] },
+  send:{ title:'Sending',
+    body:['Each person gets a private link by text. It holds their tasks and nobody else\u2019s.',
+          'I measure every link before your phone\u2019s share sheet opens. A list too long for one text goes as two or more, and each has its own tick. Someone counts as sent only when every part is ticked.',
+          'If something can\u2019t fit in a link at all, I say what it is here, before anything is sent: one task that\u2019s too long, or names that leave no room.',
+          'Sending again after a change adds to what they have. Whatever they\u2019ve marked done, and their notes, stay as they are.',
+          'A link isn\u2019t a login. Whoever holds it can act as that person, so send each list only to the person it\u2019s for.'] },
   crew:{ title:'Your crew',
     body:['Everyone you might send a list to. Each person gets a permanent ID when you add them, and renaming keeps it.',
           'The note is for you: a trade, a phone number. It stays on this phone and is never sent.',
@@ -1582,18 +1950,30 @@ function openHelp(key){
    Every history mutation queues behind an in-flight history.go(). The hash
    and the remembered view are untrusted input: a view is one of a constant
    set or it is Home. */
-const NAV_VIEWS = new Set(['home','crew','jobs','settings','support','privacy']);
+const NAV_VIEWS = new Set(['home','crew','jobs','day','settings','support','privacy']);
+/* Two views are about one job's day and carry it: day/<jobId>/<day> builds
+   the list and send/<jobId>/<day> sends it. */
+const NAV_PARAM = new Set(['day','send']);
 const NAV_ROOT = 'home';
 const NAV_EXIT_MS = 2000;
 let view = NAV_ROOT;
 let _navBase = 0, _navExpect = 0, _navExpectT = null, _navQ = [], _navExitT = null;
 let _bootReport = false;
 
-function navParseHash(h){
-  if(typeof h!=='string' || h.length>40) return null;
-  const m = /^#\/([a-z]{1,12})$/.exec(h);
-  return (m && NAV_VIEWS.has(m[1])) ? m[1] : null;
+function dayOk(s){
+  return typeof s==='string' && EGSCrew.validate(Object.assign(probeList({ boss:'A', job:'A', worker:'A' }, 'A'), { day:s }), 'list').ok;
 }
+function routeOf(v){ const p = String(v).split('/'); return { base:p[0], jobId:p[1]||null, day:p[2]||null }; }
+/* A route is a view's name, or one of the two above for a job that is on
+   this phone and a day the component accepts. Anything else is not a route. */
+function navValid(v){
+  if(typeof v!=='string' || v.length>48) return null;
+  const m = /^([a-z]{1,12})(?:\/([A-Za-z0-9_-]{22})\/(\d{4}-\d{2}-\d{2}))?$/.exec(v);
+  if(!m) return null;
+  if(!m[2]) return NAV_VIEWS.has(m[1]) ? v : null;
+  return (NAV_PARAM.has(m[1]) && dayOk(m[3]) && jobs.some(j=>j.id===m[2])) ? v : null;
+}
+function navParseHash(h){ return (typeof h==='string' && h.slice(0,2)==='#/') ? navValid(h.slice(2)) : null; }
 function navHash(v){ return '#/'+v; }
 function navEntry(v,d){ return { np:1, v:v, d:d }; }
 function navState(){ const s = history.state; return (s && s.np===1) ? s : null; }
@@ -1617,8 +1997,9 @@ function rememberView(){ lsSet(DEVICE.view, navHash(view)); }   /* only ever cal
 function navShow(name, y){ view = name; render(); window.scrollTo(0, y||0); }
 
 function go(name){
-  if(!NAV_VIEWS.has(name)) name = NAV_ROOT;
+  name = navValid(name) || NAV_ROOT;
   if(sheetIsOpen() && !closeSheet()) return;
+  if(name!==view && !leaveOk()) return;
   const y = window.scrollY;
   navOp(()=>{
     const s = navState(); if(!s || s.unseeded) return;
@@ -1650,7 +2031,10 @@ function navArmExit(){
 /* A cold stack: seeded once, at the first render past the gates. The parent
    chain is used ONLY to seed. Back never consults it. */
 function navSeed(){
-  const chain = view===NAV_ROOT ? [NAV_ROOT] : ((view==='support'||view==='privacy') ? [NAV_ROOT,'settings',view] : [NAV_ROOT,view]);
+  const r = routeOf(view);
+  const chain = view===NAV_ROOT ? [NAV_ROOT]
+    : r.jobId ? (r.base==='send' ? [NAV_ROOT,'day','day/'+r.jobId+'/'+r.day,view] : [NAV_ROOT,'day',view])
+    : ((view==='support'||view==='privacy') ? [NAV_ROOT,'settings',view] : [NAV_ROOT,view]);
   history.replaceState({ np:1, g:1, d:0, v:NAV_ROOT }, '', navHash(NAV_ROOT));
   chain.forEach((v,i)=>history.pushState(navEntry(v,i+1), '', navHash(v)));
   _navBase = chain.length;
@@ -1669,6 +2053,13 @@ function navForeign(){
        the address is clean and back still closes the sheet. */
     history.replaceState({ np:1, v:view, d:_navBase+2, o:'sheet' }, '', navHash(view));
     toast(isReport ? 'Save or close this first, then tap the report link again.' : 'Save or close this first.');
+    return;
+  }
+  if(!sheetIsOpen() && composerDirty()){
+    /* The same for a task typed and not yet added. */
+    _navBase = _navBase+1;
+    history.replaceState(navEntry(view,_navBase), '', navHash(view));
+    toast(isReport ? 'Add or clear the task you typed first, then tap the report link again.' : 'Add or clear the task you typed first.');
     return;
   }
   const t = isReport ? NAV_ROOT : (navParseHash(location.hash) || view);
@@ -1695,6 +2086,9 @@ function navOnPop(e){
     hideSheet();
   }
   if(s.o){ navTraverse(-1); return; }            /* forward onto a closed sheet's entry: step off it */
+  /* Leaving a screen with a task typed and not added asks first, and a "no"
+     steps back onto the entry that was just left. */
+  if((s.g || (navValid(s.v) || NAV_ROOT)!==view) && s.d!==_navBase && !leaveOk()){ navTraverse(_navBase-s.d); return; }
   if(s.g){
     /* Onto the guard: stay, say so, and let a second press leave. */
     history.replaceState({ np:1, g:1, d:0, v:NAV_ROOT }, '', navHash(NAV_ROOT));
@@ -1704,7 +2098,10 @@ function navOnPop(e){
     return;
   }
   _navBase = s.d;
-  navShow(NAV_VIEWS.has(s.v) ? s.v : NAV_ROOT, s.y);
+  /* Back onto another entry of the screen already showing, with a task typed:
+     nothing to draw, and drawing would wipe the field. */
+  if((navValid(s.v) || NAV_ROOT)===view && composerDirty()) return;
+  navShow(navValid(s.v) || NAV_ROOT, s.y);
   rememberView();
 }
 function navBoot(){
@@ -1714,7 +2111,7 @@ function navBoot(){
   if(s && !s.unseeded && !gate()){
     /* A reload in the same session (the update banner's Refresh): the stack
        below is still this app's. Re-validate what it names. */
-    view = NAV_VIEWS.has(s.v) ? s.v : NAV_ROOT;
+    view = navValid(s.v) || NAV_ROOT;
     if(s.o){ _navBase = s.d-1; navTraverse(-1); }
     else if(s.g){ _navBase = 0; navUnguard(); }
     else _navBase = s.d;
@@ -1751,6 +2148,10 @@ function sheetDirty(){
 function discardOk(){
   return !sheetDirty() || confirm('Discard what you typed? It hasn\u2019t been saved.');
 }
+/* The Day screen's own field is not in a sheet. A task typed there and not
+   added is lost by leaving the screen, so leaving asks the same way. */
+function composerDirty(){ const i = document.getElementById('task-new'); return !!(i && i.value.trim()); }
+function leaveOk(){ return !composerDirty() || confirm('Discard the task you typed? It hasn\u2019t been added.'); }
 /* Returns false if the sheet stayed open. `saved` is for the caller that has
    just written the sheet's fields down, so there is nothing left to lose. */
 function closeSheet(saved){
@@ -1829,17 +2230,345 @@ function renderHome(){
     +secHead('You','name')
     +'<div class="card"><div style="font-family:var(--serif);font-size:19px">'+esc(settings.boss.name)+'</div>'
     +'<div class="sub" style="margin-top:4px">Your name and permanent ID are set on this phone.</div></div>'
-    +secHead('Set up','today')
+    +secHead('Lists','today')
+    +'<div class="list" id="home-lists">'
+    +'<button data-go="day"><span class="grow">Days<br><span class="sub" id="home-days">'+esc(daysLine())+'</span></span><span class="chev">'+I.chevronR+'</span></button>'
+    +(listsState==='ready' ? lists.filter(l=>l.day===todayStr()).map(listLive).sort((a,b)=>byName(a.job, b.job)).map(l=>listRow(l, 'Today')).join('') : '')
+    +'</div>'
+    +secHead('Set up')
     +'<div class="list">'
     +'<button data-go="crew"><span class="grow">Crew<br><span class="sub" id="home-crew">'+esc(countLine('worker'))+'</span></span><span class="chev">'+I.chevronR+'</span></button>'
     +'<button data-go="jobs"><span class="grow">Jobs<br><span class="sub" id="home-jobs">'+esc(countLine('job'))+'</span></span><span class="chev">'+I.chevronR+'</span></button>'
     +'</div>'
-    +'<div class="card prose">The day\u2019s lists and sending arrive in the next build.</div>'
+    +'<div class="card prose">Reports from your crew, and the board that shows them, arrive in the next build.</div>'
     +versionStamp()+'</div>';
 }
-function topbar(title){
+function topbar(title, eyebrow){
   return '<div class="topbar"><button class="icon-btn" data-back aria-label="Back">'+I.back+'</button>'
-    +'<div class="grow"><span class="eyebrow">'+esc(APP_NAME)+'</span><h1>'+esc(title)+'</h1></div></div>';
+    +'<div class="grow"><span class="eyebrow">'+esc(eyebrow||APP_NAME)+'</span><h1>'+esc(title)+'</h1></div></div>';
+}
+
+/* ============================================================
+   Day \u2014 pick a job and a day, then build its list
+   ============================================================ */
+function daysLine(){
+  if(listsState==='loading' || listsState==='idle') return 'Reading your lists\u2026';
+  if(listsState!=='ready') return 'I can\u2019t read the lists on this phone.';
+  const n = lists.length;
+  return n===0 ? 'No lists yet. Build a day and send it.' : (n===1 ? '1 day so far' : n+' days so far');
+}
+function listsNotReady(){
+  if(listsState==='damaged'){
+    return '<div class="card prose">I can\u2019t read the lists saved on this phone, so I\u2019ve left them untouched. Restoring a backup brings them back.</div>'
+      +'<button class="btn block" data-go="support">Support &amp; Backup</button>'
+      +'<button class="btn danger block" style="margin-top:12px" data-action="lists-fresh">Start again with no lists</button>';
+  }
+  if(listsState==='failed'){
+    return '<div class="card prose">I couldn\u2019t open the storage this phone keeps lists in, so I\u2019m not showing or changing any. Close the app fully and open it again.</div>';
+  }
+  return '<div class="card prose">Reading your lists\u2026</div>';
+}
+/* How many people on a list still have something not sent. */
+function listUnsent(l){ return sendWorkers(l).filter(w=>sendState(l, w.id).k!=='sent').length; }
+function listRow(l, when){
+  const n = l.tasks.filter(t=>!t.gone).length, u = listUnsent(l);
+  return '<button data-go="'+esc('day/'+l.job.id+'/'+l.day)+'" data-list="'+esc(l.listId)+'"><span class="grow"><span class="rec-name">'+esc(l.job.name)+'</span>'
+    +'<br><span class="sub">'+esc(when+' \u00b7 '+(n===1 ? '1 task' : n+' tasks')+' \u00b7 '+(u ? u+' not sent' : 'all sent'))+'</span></span><span class="chev">'+I.chevronR+'</span></button>';
+}
+let pickDay = null;      /* the day chosen in the picker, for as long as the app is open */
+function renderDays(){
+  const head = topbar('Days')+'<div class="wrap">'+secHead('Build a day','days');
+  const liveJobs = jobs.filter(j=>!j.archived).sort(byName), people = roster.filter(w=>!w.archived);
+  let pick;
+  if(unreadable.has(K.jobs) || unreadable.has(K.roster)){
+    pick = '<div class="card prose">I can\u2019t read the crew or the jobs saved on this phone, so I can\u2019t build a day yet.</div>'
+      +'<button class="btn block" data-go="'+(unreadable.has(K.jobs) ? 'jobs' : 'crew')+'">'+(unreadable.has(K.jobs) ? 'Jobs' : 'Crew')+'</button>';
+  } else if(!liveJobs.length){
+    pick = '<div class="card prose">A list belongs to a job. Add the job first.</div><button class="btn primary block" data-go="jobs">Add a job</button>';
+  } else if(!people.length){
+    pick = '<div class="card prose">A task is for someone. Add the people on your crew first.</div><button class="btn primary block" data-go="crew">Add your crew</button>';
+  } else {
+    pick = '<input class="input" id="day-date" type="date" min="2020-01-01" aria-label="Day" value="'+esc(pickDay||todayStr())+'">'
+      +'<div class="sub" style="margin:8px 0 10px">Pick the day, then tap the job.</div>'
+      +'<div class="list" id="day-jobs">'+liveJobs.map(j=>'<button data-action="day-open" data-id="'+esc(j.id)+'"><span class="grow"><span class="rec-name">'+esc(j.name)+'</span>'
+        +(j.address ? '<br><span class="sub">'+esc(j.address)+'</span>' : '')+'</span><span class="chev">'+I.chevronR+'</span></button>').join('')+'</div>';
+  }
+  let past = '';
+  if(listsState!=='ready') past = listsNotReady();
+  else if(lists.length){
+    const all = lists.map(listLive).sort((a,b)=>(a.day<b.day ? 1 : a.day>b.day ? -1 : 0) || byName(a.job, b.job));
+    past = '<div class="list" id="day-past">'+all.slice(0, 60).map(l=>listRow(l, dayLabel(l.day))).join('')+'</div>'
+      +(all.length>60 ? '<div class="sub">Showing the newest 60 of '+all.length+'.</div>' : '');
+  }
+  return head+(listsState==='ready' || listsState==='loading' ? pick : '')+(past ? secHead('Days so far')+past : '')+versionStamp()+'</div>';
+}
+let dayWho = null;       /* who the next task is for; it stays picked between tasks */
+function chipsHtml(people, on, action){
+  return people.map(w=>'<button class="chip'+(w.id===on ? ' on' : '')+'" data-action="'+action+'" data-wid="'+esc(w.id)+'" aria-pressed="'+(w.id===on ? 'true' : 'false')+'">'+esc(w.name)+'</button>').join('');
+}
+function renderList(r){
+  const job = jobs.find(j=>j.id===r.jobId);
+  const head = topbar(job ? job.name : 'Day', dayLabel(r.day))+'<div class="wrap">';
+  if(listsState!=='ready') return head+secHead('Tasks')+listsNotReady()+versionStamp()+'</div>';
+  const people = roster.filter(w=>!w.archived).sort(byName);
+  if(!people.some(w=>w.id===dayWho)) dayWho = people.length===1 ? people[0].id : null;
+  const composer = people.length
+    ? '<div class="chips" id="day-who">'+chipsHtml(people, dayWho, 'day-who')+'</div>'
+      +'<input class="input" id="task-new" data-task-input data-msg="task-new-msg" type="text" autocapitalize="sentences" enterkeyhint="done" placeholder="What needs doing" aria-label="Task">'
+      +'<div class="field-msg bad" id="task-new-msg" aria-live="polite"></div>'
+      +'<button class="btn primary block" style="margin-top:10px" data-action="task-add">Add task</button>'
+    : '<div class="card prose">A task is for someone. Add the people on your crew first.</div><button class="btn primary block" data-go="crew">Add your crew</button>';
+  return head+secHead('Add a task','day')+composer+'<div id="day-body">'+dayBody(r)+'</div>'+versionStamp()+'</div>';
+}
+/* Everything under the field. Drawn on its own after a change, so adding a
+   task never rebuilds the field and the keyboard stays up. */
+function dayBody(r){
+  const stored = listFind(r.jobId, r.day);
+  if(!stored || !stored.tasks.length) return '<div class="card prose" style="margin-top:14px">No tasks yet. Tap who it\u2019s for, type the task, and add it.</div>';
+  const rec = listLive(stored), ws = sendWorkers(rec), unsent = listUnsent(rec);
+  let h = '<div style="margin-top:16px"><button class="btn block'+(unsent ? ' primary' : '')+'" data-action="send-open">Send lists</button>'
+    +'<div class="sub" id="day-status" style="margin-top:8px">'+esc(!ws.length ? 'Nobody has a task on this list.' : unsent ? (unsent===1 ? '1 person has' : unsent+' people have')+' something not sent.' : 'Everything is sent.')+'</div></div>';
+  ws.forEach(w=>{
+    const mine = rec.tasks.filter(t=>t.worker===w.id && !t.gone);
+    h += '<div class="grp" data-wid="'+esc(w.id)+'"><span class="who">'+esc(w.name)+'</span>'+sendPill(sendState(rec, w.id))+'</div>';
+    if(!mine.length){ h += '<div class="sub">No tasks now. They\u2019ll be told on the next send.</div>'; return; }
+    h += '<div class="list tasks" data-wid="'+esc(w.id)+'">'+mine.map((t,i)=>'<div class="task" data-id="'+esc(t.id)+'">'
+      +'<button class="task-text" data-action="task-edit" data-id="'+esc(t.id)+'">'+esc(t.text)+'</button>'
+      +'<button class="mv" data-action="task-up" data-id="'+esc(t.id)+'" aria-label="Move up"'+(i===0 ? ' disabled' : '')+'>'+I.up+'</button>'
+      +'<button class="mv" data-action="task-down" data-id="'+esc(t.id)+'" aria-label="Move down"'+(i===mine.length-1 ? ' disabled' : '')+'>'+I.down+'</button>'
+      +'</div>').join('')+'</div>';
+  });
+  const gone = rec.tasks.filter(t=>t.gone);
+  if(gone.length){
+    const who = id=>{ const w = rec.workers.find(x=>x.id===id); return w ? w.name : 'someone'; };
+    h += '<div class="grp"><span class="who muted">Cancelled</span></div><div class="list" id="day-gone">'
+      +gone.map(t=>'<button data-action="task-edit" data-id="'+esc(t.id)+'"><span class="grow"><span class="gone-text">'+esc(t.text)+'</span>'
+        +'<br><span class="sub">'+esc('Was '+who(t.worker)+'\u2019s')+'</span></span><span class="chev">'+I.chevronR+'</span></button>').join('')+'</div>';
+  }
+  return h;
+}
+/* Redraw after a list change. On the Day screen only the part under the
+   field is replaced. */
+function listRedraw(){
+  const r = routeOf(view), body = document.getElementById('day-body');
+  if(r.base==='day' && r.jobId && body && listsState==='ready'){ body.innerHTML = dayBody(r); renderBanners(); }
+  else render();
+}
+function taskMsg(id, msg){ const el = document.getElementById(id); if(el) el.textContent = msg || ''; }
+/* The limit is said while typing, not only at Add. */
+function onTaskInput(input){
+  const n = Array.from(input.value.trim()).length, max = EGSCrew.LIMITS.text;
+  taskMsg(input.dataset.msg, n>max ? 'A task can be up to '+max+' characters. This one is '+n+'.' : '');
+}
+async function addTask(){
+  const r = routeOf(view), input = document.getElementById('task-new');
+  if(!input || !r.jobId) return;
+  const c = taskTextCheck(input.value);
+  if(!c.ok){ taskMsg('task-new-msg', c.msg); input.focus(); return; }
+  if(!dayWho){ taskMsg('task-new-msg', 'Tap who it\u2019s for first.'); return; }
+  const why = await listEdit(r.jobId, r.day, (rec, now)=>taskAdd(rec, now, c.text, dayWho));
+  if(why){ taskMsg('task-new-msg', why); return; }
+  const now = document.getElementById('task-new');
+  if(now && view==='day/'+r.jobId+'/'+r.day){ now.value = ''; taskMsg('task-new-msg', ''); listRedraw(); now.focus(); }
+  else render();
+  askPersist();
+}
+function openTask(tid){
+  const r = routeOf(view), stored = r.jobId ? listFind(r.jobId, r.day) : null;
+  if(!stored) return;
+  const rec = listLive(stored), t = rec.tasks.find(x=>x.id===tid);
+  if(!t) return;
+  const owner = rec.workers.find(w=>w.id===t.worker);
+  if(t.gone){
+    sheet('<h2>Cancelled task</h2><p>'+esc(t.text)+'</p><p class="muted">'+esc('It was '+(owner ? owner.name : 'someone')+'\u2019s. Nothing was deleted.')+'</p>'
+      +'<button class="btn primary block" data-action="task-restore" data-id="'+esc(t.id)+'">Bring back</button>');
+    return;
+  }
+  /* Whoever holds it stays on offer, even if they have since been archived. */
+  const people = roster.filter(w=>!w.archived || w.id===t.worker).sort(byName);
+  sheet(helpMark('task', true)+'<h2>Change a task</h2>'
+    +'<input class="input" id="task-text" data-task-input data-msg="task-text-msg" type="text" autocapitalize="sentences" enterkeyhint="done" aria-label="Task" data-orig="'+esc(t.text)+'" value="'+esc(t.text)+'">'
+    +'<div class="field-msg bad" id="task-text-msg" aria-live="polite"></div>'
+    +'<div class="sub" style="margin:12px 0 8px">Who it\u2019s for</div>'
+    +'<div class="chips" id="task-who-chips">'+chipsHtml(people, t.worker, 'task-who')+'</div>'
+    +'<input type="hidden" id="task-who" data-orig="'+esc(t.worker)+'" value="'+esc(t.worker)+'">'
+    +'<button class="btn primary block" data-action="task-save" data-id="'+esc(t.id)+'">Save</button>'
+    +'<button class="btn danger block" data-action="task-cancel" data-id="'+esc(t.id)+'">Cancel this task</button>');
+}
+async function saveTask(tid){
+  const r = routeOf(view), input = document.getElementById('task-text'), who = document.getElementById('task-who');
+  if(!input || !who || !r.jobId) return;
+  const c = taskTextCheck(input.value);
+  if(!c.ok){ taskMsg('task-text-msg', c.msg); input.focus(); return; }
+  const why = await listEdit(r.jobId, r.day, (rec, now)=>taskChange(rec, now, tid, c.text, who.value));
+  if(why && why!==NOTHING){ taskMsg('task-text-msg', why); return; }
+  closeSheet(true); listRedraw();
+  if(!why) toast('Saved');
+}
+async function cancelTask(tid, flag){
+  const r = routeOf(view), stored = r.jobId ? listFind(r.jobId, r.day) : null;
+  const t = stored && stored.tasks.find(x=>x.id===tid);
+  if(!t) return;
+  if(flag){
+    /* Cancel acts on the saved task, so words typed and not saved would be lost. */
+    if(!discardOk()) return;
+    const rec = listLive(stored), owner = rec.workers.find(w=>w.id===t.worker), name = owner ? owner.name : 'They';
+    const had = !!(stored.sent[t.worker] && stored.sent[t.worker].ids.indexOf(tid)>=0) || !!stored.queue[t.worker];
+    /* Cancelling is this screen's delete, so it asks first. Nothing is removed. */
+    if(!confirm('Cancel \u201c'+t.text+'\u201d? Nothing is deleted, and you can bring it back. '
+      +(had ? name+' is told it\u2019s cancelled the next time you send.' : 'It hasn\u2019t been sent to '+name+' yet.'))) return;
+  }
+  const why = await listEdit(r.jobId, r.day, (rec, now)=>taskGone(rec, now, tid, flag));
+  if(why && why!==NOTHING){ toast(why); return; }
+  closeSheet(true); listRedraw(); toast(flag ? 'Cancelled' : 'Brought back');
+}
+async function moveTask(tid, dir){
+  const r = routeOf(view); if(!r.jobId) return;
+  const why = await listEdit(r.jobId, r.day, (rec, now)=>taskMove(rec, now, tid, dir));
+  if(why && why!==NOTHING){ toast(why); return; }
+  if(!why) listRedraw();
+}
+async function listsFresh(){
+  /* A delete: it removes lists this phone holds and cannot read. */
+  if(!confirm('Start again with no lists? The lists saved on this phone can\u2019t be read, and this removes them. Your crew and your jobs stay.')) return;
+  try{ await idbClearLists(); }catch(e){ toast('I couldn\u2019t change this phone\u2019s storage. Nothing was removed.'); return; }
+  lists = []; listsState = 'ready'; rev++;
+  render();
+}
+
+/* ============================================================
+   Send \u2014 the guided queue, one private link per worker
+   ============================================================ */
+function renderSend(r){
+  const job = jobs.find(j=>j.id===r.jobId);
+  const head = topbar('Send', (job ? job.name+' \u00b7 ' : '')+dayLabel(r.day))+'<div class="wrap">'+secHead('Send','send');
+  if(listsState!=='ready') return head+listsNotReady()+versionStamp()+'</div>';
+  const stored = listFind(r.jobId, r.day);
+  const rec = stored ? listLive(stored) : null, ws = rec ? sendWorkers(rec) : [];
+  if(!ws.length) return head+'<div class="card prose">There\u2019s nothing to send for this day yet. Add a task first.</div>'+versionStamp()+'</div>';
+  prepFor(stored);
+  const fresh = _prep.key===stored.listId && _prep.rev===rev && !_prep.busy;
+  let next = null, waiting = 0, blocked = 0;
+  const cards = ws.map(w=>{
+    const st = sendState(rec, w.id), q = rec.queue[w.id], p = q ? null : (fresh ? _prep.by[w.id] : null);
+    const src = q || (p && p.ok ? p : null), tag = ' data-wid="'+esc(w.id)+'"';
+    let body = '', code = '';
+    if(src){
+      const n = src.parts.length;
+      if(n>1) body += '<div class="sub" style="margin-top:8px">'+esc('Too long for one text, so it goes as '+n+'. Send every part.')+'</div>';
+      body += src.parts.map((part,i)=>{
+        const label = partLabel(w.name, i, n);
+        if(!part.done && !next) next = { wid:w.id, n:i, label:label };
+        return '<div class="part" data-n="'+i+'" data-done="'+(part.done ? '1' : '0')+'" data-chars="'+part.link.length+'">'
+          +'<button class="tick" data-action="send-tick"'+tag+' data-n="'+i+'" aria-pressed="'+(part.done ? 'true' : 'false')+'" aria-label="'+esc(label+', sent')+'">'+I.check+'</button>'
+          +'<span class="grow">'+esc(n>1 ? 'Part '+(i+1)+' of '+n : 'One text')+'</span>'
+          +'<button class="btn sm" data-action="send-part"'+tag+' data-n="'+i+'">'+(part.done ? 'Again' : 'Send')+'</button></div>';
+      }).join('');
+    } else if(p && !p.ok){
+      /* Refused before anything is shared, with its own cause (rule 12). */
+      blocked++; code = p.code;
+      const fix = p.code==='task_too_long' ? 'Shorten this task' : p.code==='names_too_long' ? 'Shorten this name' : '';
+      body = '<div class="field-msg bad refusal">'+esc(p.reason || EGSCrew.REASONS.invalid)+'</div>'
+        +(fix ? '<button class="btn sm" style="margin-top:10px" data-action="send-fix"'+tag+'>'+fix+'</button>' : '');
+    } else if(st.k==='sent'){
+      body = '<button class="btn sm" style="margin-top:10px" data-action="send-again"'+tag+'>Send again</button>';
+    } else { waiting++; body = '<div class="sub" style="margin-top:8px">Measuring\u2026</div>'; }
+    return '<div class="card send-w"'+tag+' data-state="'+st.k+'"'+(code ? ' data-refused="'+esc(code)+'"' : '')+'>'
+      +'<div class="grp"><span class="who">'+esc(w.name)+'</span>'+sendPill(st)+'</div>'+body+'</div>';
+  }).join('');
+  const sentN = ws.filter(w=>sendState(rec, w.id).k==='sent').length;
+  const top = next ? '<button class="btn primary block" id="send-next" data-action="send-part" data-wid="'+esc(next.wid)+'" data-n="'+next.n+'">'+esc('Send '+next.label)+'</button>'
+      +'<div class="sub" id="send-count" style="margin-top:8px">'+esc(sentN+' of '+ws.length+' sent')+'</div>'
+    : waiting ? '<div class="card prose">Measuring the links\u2026</div>'
+    : blocked ? '<div class="card prose">Nothing else can go until what\u2019s below is fixed.</div>'
+    : '<div class="card prose" id="send-done">Everything is sent.</div>';
+  return head+top+'<div style="margin-top:14px">'+cards+'</div>'+versionStamp()+'</div>';
+}
+function shareLine(rec, i, n){
+  return rec.boss.name+': tasks for '+rec.job.name+', '+dayLabel(rec.day)+(n>1 ? ' (part '+(i+1)+' of '+n+')' : '');
+}
+/* Write a measured send down as this worker's queue. Resolves to the stored
+   list, or null if there was nothing measured to start or it would not save. */
+async function queueStart(r, wid){
+  const stored = listFind(r.jobId, r.day); if(!stored) return null;
+  if(stored.queue[wid]) return stored;
+  const p = _prep.by[wid];
+  if(!p || !p.ok || _prep.busy || _prep.rev!==rev || _prep.key!==stored.listId) return null;
+  const why = await listEdit(r.jobId, r.day, rec=>{
+    if(rec.queue[wid]) return NOTHING;
+    rec.queue[wid] = { sendId:p.sendId, at:p.at, parts:p.parts.map(x=>({ link:x.link, ids:x.ids, done:false })) };
+    return null;
+  }, true);
+  if(why && why!==NOTHING){ toast(why); return null; }
+  delete _prep.by[wid]; delete _prep.force[wid];
+  return listFind(r.jobId, r.day);
+}
+/* One part, out through the share sheet. The send is written down as the
+   sheet opens, not after it closes: a phone that shuts the app while the
+   message is being written still knows which links belong to this send.
+   The sheet is asked for before anything is awaited, because a browser only
+   opens it straight from a tap. */
+async function sendPart(wid, n){
+  const r = routeOf(view); if(r.base!=='send' || !r.jobId) return;
+  const stored = listFind(r.jobId, r.day); if(!stored) return;
+  const p = _prep.by[wid];
+  const src = stored.queue[wid] || ((p && p.ok && !_prep.busy && _prep.rev===rev && _prep.key===stored.listId) ? p : null);
+  const part = src && src.parts[n];
+  if(!part) return;
+  const rec = listLive(stored), w = rec.workers.find(x=>x.id===wid);
+  const text = shareLine(rec, n, src.parts.length)+'\n'+part.link;
+  const written = queueStart(r, wid);
+  let shared = false, backedOut = false;
+  if(navigator.share){
+    try{ await navigator.share({ text:text }); shared = true; }
+    catch(e){ backedOut = !!(e && e.name==='AbortError'); }
+  }
+  if(!(await written)){ render(); return; }                  /* it could not be written down, and said so */
+  if(shared){ await tickPart(wid, n, true); return; }
+  if(backedOut){ render(); return; }                         /* backed out: not sent, not ticked */
+  /* No share sheet here. Copying is not sending, so the tick is left to you. */
+  try{ await navigator.clipboard.writeText(text); render(); toast('Copied. Paste it into a text to '+(w ? w.name : 'them')+', then tick it.'); }
+  catch(e){
+    render();
+    sheet('<h2>'+esc(partLabel(w ? w.name : 'Their', n, src.parts.length))+'</h2>'
+      +'<div class="muted" style="font-size:13px;margin-bottom:10px">Copy this and send it by text, then tick it:</div>'
+      +'<div class="card mono" style="font-size:12.5px;word-break:break-all;line-height:1.6">'+esc(text)+'</div>'
+      +'<button class="btn primary block" data-copy="'+esc(text)+'">Copy</button>');
+  }
+}
+/* A tick. What that part carried is recorded as given straight away, so a
+   tombstone can follow it even if the rest of the send never goes. The
+   worker counts as sent, as of the moment the links were measured, only
+   when every part is ticked. */
+async function tickPart(wid, n, flag){
+  const r = routeOf(view); if(r.base!=='send' || !r.jobId) return;
+  if(!(await queueStart(r, wid))) return;
+  const why = await listEdit(r.jobId, r.day, rec=>{
+    const q = rec.queue[wid], part = q && q.parts[n];
+    if(!part || part.done===flag) return NOTHING;
+    part.done = flag;
+    if(flag){
+      const was = rec.sent[wid] ? rec.sent[wid].at : 0;
+      rec.sent = EGSCrew.recordSend(rec.sent, { tasks:rec.tasks.filter(t=>part.ids.indexOf(t.id)>=0) }, [wid], was);
+      if(q.parts.every(p=>p.done)){ rec.sent = EGSCrew.recordSend(rec.sent, rec, [wid], q.at); delete rec.queue[wid]; }
+    }
+    return null;
+  }, true);
+  if(why && why!==NOTHING) toast(why);
+  render();
+}
+function sendAgain(wid){
+  const r = routeOf(view), stored = r.jobId ? listFind(r.jobId, r.day) : null;
+  if(!stored || stored.queue[wid]) return;
+  _prep.force[wid] = true; rev++; render();
+}
+function sendFix(wid){
+  const p = _prep.by[wid]; if(!p || p.ok) return;
+  if(p.code==='task_too_long' && p.taskId) openTask(p.taskId);
+  else if(p.code==='names_too_long'){
+    if(p.which==='boss') openEditName();
+    else if(p.which==='job' || p.which==='worker') openRecord(p.which, p.id);
+  }
 }
 function renderSettings(){
   const mode = themeMode();
@@ -1934,7 +2663,7 @@ function nowSec(){ return Math.floor(Date.now()/1000); }
 function putRecords(kind, next){
   const before = recordsOf(kind);
   setRecords(kind, next);
-  if(commit(KINDS[kind].key)) return true;
+  if(commit(KINDS[kind].key)){ rev++; return true; }
   setRecords(kind, before);
   return false;
 }
@@ -1993,7 +2722,7 @@ function renderPrivacy(){
     +secHead('What I collect')
     +card('Nothing. No account, no sign-up, no email. I don’t know who you are or who is on your crew, and I don’t track what you do in this app.')
     +secHead('Where your data lives')
-    +card('On this phone only: your name, your ID, your crew and your jobs, and later your lists. I never receive a copy. There’s no server for it to go to.')
+    +card('On this phone only: your name, your ID, your crew, your jobs and your lists. I never receive a copy. There’s no server for it to go to.')
     +secHead('When this app touches the internet')
     +card('To load the app itself from GitHub Pages. GitHub sees what any web server sees, such as your IP address and browser type, and none of your data goes with that request. Offline, the app runs from its own copy on this phone.<br><br>'
       +'<b>Lists and reports travel in your own text messages.</b> A list is a link, and the list itself sits in the part of the link after the <span class="mono">#</span>. Browsers never send that part to any server, so GitHub never sees crew data. A list or a report is exactly as private as the text message carrying it.<br><br>'
@@ -2136,13 +2865,15 @@ function egsSupportCoreHtml(tabs){
     <div class="card" style="margin-top:18px;text-align:center;font-family:var(--mono);font-size:11px;letter-spacing:.05em;color:var(--paper-faint)">Built by one person in Canada \u00b7 no shareholders, no ads, ever<br>Contributions are voluntary. Every bit helps keep EGS independent. Thank you.</div>`;
 }
 
-const VIEW_RENDER = { home:renderHome, crew:()=>renderRecords('worker'), jobs:()=>renderRecords('job'),
+const VIEW_RENDER = { home:renderHome, crew:()=>renderRecords('worker'), jobs:()=>renderRecords('job'), day:renderDays,
                       settings:renderSettings, support:renderSupport, privacy:renderPrivacy };
 function render(){
   const g = gate();
   if(g){ $app.innerHTML = renderGate(g); $banners.innerHTML = ''; return; }
   const s = navState(); if(s && s.unseeded) navSeed();
-  $app.innerHTML = VIEW_RENDER[view]();
+  listsNeed();                                  /* read the lists, once, now that there is a name */
+  const r = routeOf(view);
+  $app.innerHTML = r.jobId ? (r.base==='send' ? renderSend(r) : renderList(r)) : VIEW_RENDER[view]();
   if(view==='settings') settingsNameNote();
   renderBanners();
 }
@@ -2191,6 +2922,7 @@ async function saveName(input){
     showNameResult(el, { level:'bad', msg:'I couldn’t save that on this phone. Nothing was changed.' });
     return;
   }
+  rev++;
   if(first){ view = NAV_ROOT; render(); window.scrollTo(0,0); askPersist(); }
   else { closeSheet(true); render(); toast('Name saved'); }
 }
@@ -2219,12 +2951,17 @@ const BACKUP_MAX_BYTES = 5*1024*1024;
 function todayStr(){ const d = new Date(); const p = n=>String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
 async function buildBackup(){
   const crew = await idbDump();
+  /* Lists go into the file through the same judge that reads them back, and
+     without any half-finished send: the links of a send belong to the phone
+     that started it. A stored list that fails the check stops the export. */
+  crew.lists = cleanLists(crew.lists, true);
+  if(!crew.lists) throw new Error('a stored list failed its check');
   return { app:APP_ID, kind:'backup', version:BACKUP_VERSION, exportedAt:new Date().toISOString(),
            appVersion:String(window.EGS_VERSION||'dev'), settings:settings, roster:roster, jobs:jobs, crew:crew };
 }
 async function doExport(){
   /* A store this phone can't read would go into the file as empty. */
-  if(unreadable.size){ toast('I can\u2019t read everything saved on this phone, so I didn\u2019t make a backup that would be missing it.'); return false; }
+  if(unreadable.size || listsState==='damaged'){ toast('I can\u2019t read everything saved on this phone, so I didn\u2019t make a backup that would be missing it.'); return false; }
   let payload;
   try{ payload = await buildBackup(); }
   catch(e){ toast('I couldn’t read everything, so I didn’t make a backup that would be missing some of it.'); return false; }
@@ -2260,16 +2997,20 @@ function readBackup(text){
      phone. One bad record, or one id twice, refuses the whole file. */
   const ros = cleanRecords('worker', o.roster), jb = cleanRecords('job', o.jobs);
   if(!ros || !jb) return no('Someone on the crew or one of the jobs in that backup doesn\u2019t check out, so I didn\u2019t use any of it.');
-  /* Lists and reports have no shape in this build, so there is nothing to
-     check them against. A file that carries any is refused whole rather than
-     stored unchecked. The build that adds them adds their check. */
+  /* Lists go through the same judge as the ones on this phone: one bad
+     list refuses the whole file. Reports have no shape in this build, so
+     there is nothing to check them against, and a file that carries any is
+     refused whole rather than stored unchecked. The build that adds reports
+     adds their check. */
   let crew = null;
   if(o.crew!==undefined){
     if(!isObj(o.crew) || !IDB_STORES.every(n=>Array.isArray(o.crew[n]))) return no('That backup doesn\u2019t check out, so I didn\u2019t use any of it.');
-    crew = {}; IDB_STORES.forEach(n=>{ crew[n] = o.crew[n]; });
+    if(o.crew.reports.length)
+      return no('That backup holds crew reports, which this version can\u2019t check yet, so I didn\u2019t use any of it. Update the app, then restore it.');
+    const ls = cleanLists(o.crew.lists, true);
+    if(!ls) return no('One of the lists in that backup doesn\u2019t check out, so I didn\u2019t use any of it.');
+    crew = { lists:ls, reports:[] };
   }
-  if(crew && IDB_STORES.some(n=>crew[n].length))
-    return no('That backup holds lists or reports, which this version can\u2019t check yet, so I didn\u2019t use any of it. Update the app, then restore it.');
   const when = (typeof o.exportedAt==='string' && o.exportedAt.length<=40 && Date.parse(o.exportedAt)) ? new Date(Date.parse(o.exportedAt)).toISOString() : null;
   return { ok:true, schema:proSchemaOf(s), boss:{ id:s.boss.id, name:s.boss.name }, roster:ros, jobs:jb, crew:crew, exportedAt:when };
 }
@@ -2280,19 +3021,24 @@ async function doRestore(file){
   try{ text = await file.text(); }catch(e){ restoreRefused('I couldn’t read that file.'); return; }
   const b = readBackup(text);
   if(!b.ok){ restoreRefused(b.reason); return; }
-  /* Restore replaces, so it asks first whenever there is anything to replace. */
-  if(hasIdentity(settings) || unreadable.size || roster.length || jobs.length){
+  /* Restore replaces, so it asks first whenever there is anything to replace.
+     Lists count even when they have not been read yet (no name on this
+     phone) or could not be (damaged): the file's lists would replace them. */
+  let held = lists.length;
+  if(b.crew && listsState!=='ready'){ try{ held = (await idbDump()).lists.length; }catch(e){} }
+  if(hasIdentity(settings) || unreadable.size || roster.length || jobs.length || held){
     const same = hasIdentity(settings) && settings.boss.id===b.boss.id;
     const live = l=>l.filter(r=>!r.archived).length;
     if(!confirm('Restore this backup? It REPLACES what\u2019s on this phone with what\u2019s in the file: '+b.boss.name
-      +', '+live(b.roster)+' on the crew, '+live(b.jobs)+' jobs.'
+      +', '+live(b.roster)+' on the crew, '+live(b.jobs)+' jobs'+(b.crew ? ', '+(b.crew.lists.length===1 ? '1 list' : b.crew.lists.length+' lists') : '')+'.'
       +(same?'':' The ID in the file is different from the one on this phone.'))) return;
   }
   /* A backup with no crew section leaves this phone's lists and reports as
      they are (spec rule 8). One with a section replaces them, first, so a
      failure here leaves everything else untouched. */
+  let crewWas = null;
   if(b.crew){
-    try{ await idbReplace(b.crew); }
+    try{ crewWas = await idbDump(); await idbReplace(b.crew); }
     catch(e){ restoreRefused('I couldn\u2019t write to this phone\u2019s storage, so nothing was restored.'); return; }
   }
   /* Data before the number that describes it: crew, jobs, then settings,
@@ -2307,9 +3053,12 @@ async function doRestore(file){
   if(!(put('roster') && put('jobs') && saveSettings({ replace:true }))){
     roster = was.roster; jobs = was.jobs; settings = was.settings; schemaFromFuture = was.future; proSchemaReached = was.reached;
     ['roster','jobs'].forEach(name=>{ if(was.raw[name]!=null && lsGet(K[name])!==was.raw[name]) lsSet(K[name], was.raw[name]); });
+    if(crewWas){ try{ await idbReplace(crewWas); }catch(e){} }      /* the lists go back too */
     restoreRefused('I couldn\u2019t write to this phone\u2019s storage, so nothing was restored.'); return;
   }
   startedFresh.clear();
+  if(b.crew){ lists = b.crew.lists; listsState = 'ready'; }
+  rev++;
   if(b.exportedAt) lsSet(DEVICE.lastBackup, b.exportedAt);
   if(sheetIsOpen()) closeSheet();
   if(navState() && navState().unseeded){ view = NAV_ROOT; render(); window.scrollTo(0,0); }
@@ -2381,8 +3130,8 @@ function renderBanners(){
     const never = !Date.parse(lsGet(DEVICE.lastBackup)||'');
     const head = backupOverdue() ? (never ? 'No backup yet' : 'Time for a fresh backup') : 'This browser may clear the app';
     const body = backupOverdue()
-      ? 'Your crew and jobs exist only on this phone. A backup file means a lost phone doesn\u2019t lose them, or your ID.'
-      : 'Your browser hasn\u2019t agreed to keep this app\u2019s storage, so it can clear your crew and jobs when space runs short. Installing the app, or saving a backup file, protects them.';
+      ? 'Your crew, jobs and lists exist only on this phone. A backup file means a lost phone doesn\u2019t lose them, or your ID.'
+      : 'Your browser hasn\u2019t agreed to keep this app\u2019s storage, so it can clear your crew, jobs and lists when space runs short. Installing the app, or saving a backup file, protects them.';
     h = '<div class="banner"><b>'+head+'</b>'+esc(body)
       +'<div class="acts"><button class="btn sm primary" data-action="export">Back up now</button>'
       +'<button class="btn sm" data-action="nudge-snooze">Later</button></div></div>';
@@ -2426,6 +3175,31 @@ document.addEventListener('click', function(ev){
   else if(act==='rec-archive'){ setArchived(el.dataset.kind, el.dataset.id, true); }
   else if(act==='rec-unarchive'){ setArchived(el.dataset.kind, el.dataset.id, false); }
   else if(act==='store-fresh'){ storeFresh(el.dataset.kind); }
+  else if(act==='lists-fresh'){ listsFresh(); }
+  else if(act==='day-open'){
+    const d = document.getElementById('day-date'), day = d ? d.value : '';
+    if(!dayOk(day)){ toast('Pick a day first.'); return; }
+    go('day/'+el.dataset.id+'/'+day);
+  }
+  else if(act==='day-who' || act==='task-who'){
+    /* A chip patches in place: no re-render, so the field keeps its text and the keyboard. */
+    const box = el.parentNode;
+    box.querySelectorAll('.chip').forEach(c=>{ const on = c===el; c.classList.toggle('on', on); c.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+    if(act==='day-who'){ dayWho = el.dataset.wid; if(/Tap who/.test((document.getElementById('task-new-msg')||{}).textContent||'')) taskMsg('task-new-msg', ''); }
+    else { const h = document.getElementById('task-who'); if(h) h.value = el.dataset.wid; }
+  }
+  else if(act==='task-add'){ addTask(); }
+  else if(act==='task-edit'){ openTask(el.dataset.id); }
+  else if(act==='task-save'){ saveTask(el.dataset.id); }
+  else if(act==='task-cancel'){ cancelTask(el.dataset.id, true); }
+  else if(act==='task-restore'){ cancelTask(el.dataset.id, false); }
+  else if(act==='task-up'){ moveTask(el.dataset.id, -1); }
+  else if(act==='task-down'){ moveTask(el.dataset.id, 1); }
+  else if(act==='send-open'){ const r = routeOf(view); if(r.jobId) go('send/'+r.jobId+'/'+r.day); }
+  else if(act==='send-part'){ sendPart(el.dataset.wid, +el.dataset.n); }
+  else if(act==='send-tick'){ tickPart(el.dataset.wid, +el.dataset.n, el.getAttribute('aria-pressed')!=='true'); }
+  else if(act==='send-again'){ sendAgain(el.dataset.wid); }
+  else if(act==='send-fix'){ sendFix(el.dataset.wid); }
   else if(act==='theme'){ setTheme(el.dataset.mode); render(); toast('Look: '+THEME_LABEL[themeMode()]); }
   else if(act==='guide'){ guideSet(!guideOn()); el.setAttribute('aria-checked', guideOn()?'true':'false'); }
   else if(act==='export'){ doExport(); }
@@ -2437,17 +3211,22 @@ document.addEventListener('click', function(ev){
 });
 document.addEventListener('input', function(ev){
   const t = ev.target;
-  if(t instanceof Element && t.matches('[data-name-input]')) onNameInput(t);
+  if(!(t instanceof Element)) return;
+  if(t.matches('[data-name-input]')) onNameInput(t);
+  else if(t.matches('[data-task-input]')) onTaskInput(t);
 });
 document.addEventListener('keydown', function(ev){
   const t = ev.target;
   if(ev.key!=='Enter' || !(t instanceof Element)) return;
-  if(t.matches('#rec-name, #rec-extra')){ ev.preventDefault(); const b = document.querySelector('[data-action="rec-save"]'); if(b) b.click(); }
+  if(t.id==='task-new'){ ev.preventDefault(); addTask(); }
+  else if(t.id==='task-text'){ ev.preventDefault(); const b = document.querySelector('[data-action="task-save"]'); if(b) b.click(); }
+  else if(t.matches('#rec-name, #rec-extra')){ ev.preventDefault(); const b = document.querySelector('[data-action="rec-save"]'); if(b) b.click(); }
   else if(t.matches('[data-name-input]')){ ev.preventDefault(); saveName(t); }
 });
 document.addEventListener('change', function(ev){
   const t = ev.target;
-  if(t instanceof Element && t.matches('[data-import]')){
+  if(t instanceof Element && t.id==='day-date'){ if(dayOk(t.value)) pickDay = t.value; }
+  else if(t instanceof Element && t.matches('[data-import]')){
     const f = t.files && t.files[0];
     t.value = '';                              /* the same file can be picked again */
     doRestore(f);
