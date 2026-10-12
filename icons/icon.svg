@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs>
+  <linearGradient id="post" x1="0" y1="0" x2="0.6" y2="1">
+    <stop offset="0" stop-color="#AAB6C1"/><stop offset="0.5" stop-color="#8A96A1"/><stop offset="1" stop-color="#646E78"/>
+  </linearGradient>
+  <linearGradient id="diag" x1="0" y1="0" x2="0.6" y2="1">
+    <stop offset="0" stop-color="#CBD6E0"/><stop offset="0.5" stop-color="#A6B2BD"/><stop offset="1" stop-color="#808C97"/>
+  </linearGradient>
+  <radialGradient id="vig" cx="0.5" cy="0.4" r="0.78">
+    <stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.5"/>
+  </radialGradient>
+  <filter id="grain" x="0" y="0" width="100%" height="100%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.04 1.6" numOctaves="3" seed="5"/>
+    <feColorMatrix type="saturate" values="0"/>
+  </filter>
+  <clipPath id="letter"><rect x="156" y="140" width="52" height="232" /><rect x="150" y="140" width="64" height="18" /><rect x="150" y="354" width="64" height="18" /><rect x="304" y="140" width="52" height="232" /><rect x="298" y="140" width="64" height="18" /><rect x="298" y="354" width="64" height="18" /><polygon points="178,140 236,140 340,372 282,372"/></clipPath>
+  <clipPath id="round"><rect width="512" height="512" rx="123"/></clipPath>
+</defs>
+<g clip-path="url(#round)">
+  <rect width="512" height="512" fill="#1A1E25"/>
+  <g transform="translate(256,200) scale(0.85) translate(-256,-256)">
+    <g fill="none" stroke="#D6A84B">
+      <circle cx="256" cy="256" r="205" stroke-width="10"/>
+      <rect x="111" y="111" width="290" height="290" stroke-width="6"/>
+    </g>
+    <g fill="#D6A84B"><circle cx="111" cy="111" r="9"/><circle cx="401" cy="111" r="9"/><circle cx="111" cy="401" r="9"/><circle cx="401" cy="401" r="9"/></g>
+    <g fill="url(#post)"><rect x="156" y="140" width="52" height="232" /><rect x="150" y="140" width="64" height="18" /><rect x="150" y="354" width="64" height="18" /><rect x="304" y="140" width="52" height="232" /><rect x="298" y="140" width="64" height="18" /><rect x="298" y="354" width="64" height="18" /></g>
+    <g fill="none" stroke="#39424B" stroke-width="2.5" opacity="0.85"><rect x="156" y="140" width="52" height="232" /><rect x="150" y="140" width="64" height="18" /><rect x="150" y="354" width="64" height="18" /><rect x="304" y="140" width="52" height="232" /><rect x="298" y="140" width="64" height="18" /><rect x="298" y="354" width="64" height="18" /></g>
+    <polygon points="178,140 236,140 340,372 282,372" fill="url(#diag)" stroke="#39424B" stroke-width="2.5"/>
+    <g clip-path="url(#letter)">
+      <g fill="#4A545E" opacity="0.3"><rect x="140" y="164" width="232" height="3"/><rect x="140" y="188" width="232" height="3"/><rect x="140" y="212" width="232" height="3"/><rect x="140" y="236" width="232" height="3"/><rect x="140" y="260" width="232" height="3"/><rect x="140" y="284" width="232" height="3"/><rect x="140" y="308" width="232" height="3"/><rect x="140" y="332" width="232" height="3"/><rect x="140" y="356" width="232" height="3"/></g>
+      <rect x="140" y="130" width="232" height="252" filter="url(#grain)" opacity="0.26"/>
+    </g></g>
+  <rect width="512" height="512" fill="url(#vig)"/>
+  <rect y="392" width="512" height="120" fill="#0C1016"/>
+  <rect y="392" width="512" height="5" fill="#D6A84B"/>
+  <g fill="#D6A84B"><path transform="translate(172.131,474) scale(0.0302734375,-0.0302734375)" d="M1399 1064Q1399 944 1349.5 857.5Q1300 771 1213 717Q1123 661 1007.5 636.0Q892 611 748 611H632V212Q632 176 645.5 149.5Q659 123 697 107Q717 99 762.0 90.0Q807 81 838 78V0H69V78Q98 81 146.0 86.5Q194 92 213 100Q252 116 264.5 139.0Q277 162 277 203V1204Q277 1239 265.0 1264.5Q253 1290 213 1307Q185 1319 138.5 1328.5Q92 1338 69 1341V1419H852Q1127 1419 1263.0 1331.5Q1399 1244 1399 1064ZM1009 1013Q1009 1173 944.5 1250.5Q880 1328 715 1328H632V705H674Q838 705 923.5 780.5Q1009 856 1009 1013Z"/><path transform="translate(227.604,474) scale(0.0302734375,-0.0302734375)" d="M1698 0H1154Q1013 216 919.5 344.0Q826 472 687 640H632V209Q632 173 645.5 148.0Q659 123 697 106Q716 98 756.5 89.5Q797 81 826 78V0H69V78Q98 81 145.5 86.5Q193 92 213 100Q251 116 264.0 140.5Q277 165 277 203V1204Q277 1240 266.0 1264.0Q255 1288 213 1306Q181 1319 137.5 1328.0Q94 1337 69 1341V1419H865Q1132 1419 1270.5 1335.5Q1409 1252 1409 1083Q1409 934 1323.5 843.5Q1238 753 1063 702Q1131 614 1221.5 498.0Q1312 382 1410 261Q1441 222 1494.5 165.5Q1548 109 1589 96Q1612 89 1647.5 84.0Q1683 79 1698 78ZM1017 1055Q1017 1197 937.5 1262.5Q858 1328 711 1328H632V734H708Q855 734 936.0 811.0Q1017 888 1017 1055Z"/><path transform="translate(289.040,474) scale(0.0302734375,-0.0302734375)" d="M1380 1261Q1485 1165 1546.5 1029.0Q1608 893 1608 719Q1608 564 1556.0 424.0Q1504 284 1406 183Q1303 78 1164.0 19.5Q1025 -39 833 -39Q678 -39 540.0 12.0Q402 63 297 160Q193 255 132.0 391.0Q71 527 71 694Q71 868 130.5 1009.5Q190 1151 294 1252Q397 1351 538.5 1404.5Q680 1458 840 1458Q999 1458 1138.5 1406.0Q1278 1354 1380 1261ZM1123 246Q1168 337 1188.0 452.0Q1208 567 1208 712Q1208 835 1190.5 951.5Q1173 1068 1131 1159Q1088 1250 1017.0 1305.0Q946 1360 840 1360Q659 1360 565.0 1188.5Q471 1017 471 704Q471 571 491.5 453.0Q512 335 556 247Q601 158 670.0 108.5Q739 59 840 59Q939 59 1010.0 109.0Q1081 159 1123 246Z"/></g>
+</g>
+</svg>
