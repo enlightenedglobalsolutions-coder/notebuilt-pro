@@ -12,7 +12,7 @@
 importScripts('./sw_logic.js');   // provides self.EGS_SW
 
 const APP_NAME      = 'notebuilt-pro';   // <-- the ONE line you change per app
-const CACHE_VERSION = '2026.10.12-1122';           // <-- egs-deploy.sh stamps this each deploy
+const CACHE_VERSION = '2026.10.12-1200';           // <-- egs-deploy.sh stamps this each deploy
 const CACHE = EGS_SW.cacheName(APP_NAME, CACHE_VERSION);
 
 // Offline shell. For single-file apps this is basically index.html + icons.

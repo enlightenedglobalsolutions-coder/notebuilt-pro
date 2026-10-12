@@ -27,7 +27,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <!-- EGS-STD:coldopen-version -->
-<script>window.EGS_VERSION = '2026.10.12-1122 (8f1f7cd)';</script>
+<script>window.EGS_VERSION = '2026.10.12-1200 (900eab8)';</script>
 <title>Notebuilt Pro</title>
 <meta name="description" content="Task lists for a crew, sent by text. Private, on-device, by EGS.">
 <!-- EGS-STD:themes — this script runs BEFORE the stylesheet so the first paint
@@ -1059,8 +1059,9 @@
 /* =============================================================================
    Notebuilt Pro app logic. Copyright (c) 2026 EGS. All rights reserved.
 
-   Stage 1 of the phase 1 build: shell, storage, standards, boss identity.
-   Crew, Jobs, Day, Send, Board and Reports are later stages and are not here.
+   Stage 2 of the phase 1 build: shell, storage, standards, boss identity,
+   Crew and Jobs. Day, Send, Board and Reports are later stages and are not
+   here.
 
    The crew-task component above (EGSCrew) is a byte-identical copy of the
    platform's. It owns ids, limits, the codec and the measuring. Nothing in
@@ -1083,7 +1084,7 @@ const DEVICE = {
 /* Lists and reports grow every day, so they live in IndexedDB. The store
    layout is versioned by IDB_VERSION; the database name never changes. */
 const IDB_NAME = 'notebuiltpro';
-const IDB_VERSION = 1;
+const IDB_VERSION = 2;
 const IDB_STORES = ['lists','reports'];
 /* Left behind on this origin by the self-check harness this app replaced.
    Never read. Removed by the first ordinary save, so startup stays write-free. */
@@ -1100,14 +1101,16 @@ const PAYMENT_TABS = [
 ];
 let supportTab = 'interac';
 const SHARE_APP_LINE = 'Notebuilt Pro — task lists for a crew, sent by text. Private, offline, yours.';
-const APP_BACKUP_DESC = "A backup is one file holding everything this app keeps: your name, your permanent ID and, as they arrive, your crew, jobs and lists. Keep it somewhere that isn't this phone. Restoring it on a new phone brings back the same ID, so lists you've already sent still match.";
+const APP_BACKUP_DESC = "A backup is one file holding everything this app keeps: your name, your permanent ID, your crew and your jobs, and later your lists. Keep it somewhere that isn't this phone. Restoring it on a new phone brings back the same ID, so lists you've already sent still match.";
 const APP_MONETIZATION = {
   model: 'free',
   blurb: "Notebuilt Pro is free while it's being tried out on real jobs. When it gets a price, it will be a one-time price: no subscription, and nothing you've made will be held back."
 };
 
-/* EGS-STD:apps-directory — seeded from EGS-STANDARDS.md §3a. Sync from there,
-   never hand-drift. An app with no canonical URL yet is listed without a link. */
+/* The More EGS apps list, seeded by hand from EGS-STANDARDS.md §3a. It carries
+   no standards marker on purpose: that row says the list is synced at deploy,
+   and no sync exists. An app with no canonical URL yet is listed without a
+   link. */
 const EGS_APPS = [
   {name:'Notebuilt', line:'A field notebook for trade crews.', url:'https://notebuilt.ca/'},
   {name:'What’s For Dinner', line:'Find dinner without the scroll.', url:'https://wfdegs.ca/'},
@@ -1196,21 +1199,45 @@ function nameStandIns(name){
   const mix = c.filter((_,i)=>i%2).concat(c.filter((_,i)=>!(i%2))).join('');
   return { job:rev.trim()?rev:name, worker:mix.trim()?mix:name };
 }
-async function nameCheck(raw, others){
+function utf8len(s){ return new TextEncoder().encode(s).length; }
+/* The name that costs a link the most, among the records still in use. */
+function heaviest(list, excludeId){
+  let best = null, n = -1;
+  list.forEach(r=>{ if(r.archived || r.id===excludeId) return; const l = utf8len(r.name); if(l>n){ n = l; best = r.name; } });
+  return best;
+}
+/* role is whose name this is: 'boss', 'worker' or 'job'. The other two slots
+   take the real names already on this phone (your name, and the heaviest job
+   or worker name), and a stand-in only where there is none yet. excludeId is
+   the record being edited, so a name is never weighed against itself.
+   `given` lets a caller supply the other two outright. */
+async function nameCheck(raw, role, excludeId, given){
+  role = role || 'boss';
   const name = String(raw==null?'':raw).trim();
   if(!name) return { level:'empty', name:name };
   const v = bossValid(null, name);
   if(!v.ok) return { level:'bad', name:name, msg:nameProblem(v) };
-  const alt = nameStandIns(name);
-  let n = { boss:name, job:(others&&others.job)||alt.job, worker:(others&&others.worker)||alt.worker };
+  const alt = nameStandIns(name), spare = [alt.job, alt.worker];
+  const known = given || {
+    boss: hasIdentity(settings) ? settings.boss.name : null,
+    job: heaviest(jobs, excludeId),
+    worker: heaviest(roster, excludeId)
+  };
+  let guessed = false, n = {};
+  ['boss','job','worker'].forEach(slot=>{
+    if(slot===role) n[slot] = name;
+    else if(known[slot]) n[slot] = known[slot];
+    else { n[slot] = spare.shift(); guessed = true; }
+  });
   let full = await EGSCrew.measure(probeList(n, PROBE_TASK));
-  if(!full.ok){ n = { boss:name, job:name, worker:name }; full = await EGSCrew.measure(probeList(n, PROBE_TASK)); }
+  if(!full.ok){ n = { boss:name, job:name, worker:name }; guessed = true; full = await EGSCrew.measure(probeList(n, PROBE_TASK)); }
   if(full.ok && full.fits) return { level:'ok', name:name };
+  const beside = guessed ? 'If the other names on a list run about as long' : 'Beside the longest names you already have';
   const bare = await EGSCrew.measure(probeList(n, 'A'));
   if(bare.ok && bare.fits) return { level:'tight', name:name,
-    msg:'A name this long takes up a lot of a link. If your job and crew names run about as long, a full-length task won’t fit in one text, and I’ll have to ask you to shorten it when you send. A shorter name avoids that.' };
+    msg:'A name this long takes up a lot of a link. '+beside+', a full-length task won\u2019t fit in one text, and I\u2019ll have to ask you to shorten it when you send. A shorter name avoids that.' };
   return { level:'none', name:name,
-    msg:'A name this long leaves no room in a link. With job and crew names about as long, not even a short task would fit, so I couldn’t send a list at all. A shorter name fixes that.' };
+    msg:'A name this long leaves no room in a link. '+beside+', not even a short task would fit, so I couldn\u2019t send a list at all. A shorter name fixes that.' };
 }
 
 /* ============================================================
@@ -1225,7 +1252,7 @@ async function nameCheck(raw, others){
        file, never the phone.
 
    They are never compared and never assigned across. */
-const PRO_SCHEMA_VERSION = 1;
+const PRO_SCHEMA_VERSION = 2;
 
 /* The ladder — the registration point. The key is the version being migrated
    TO, and the function takes the stored shape from key-1 up to key, in
@@ -1237,10 +1264,18 @@ const PRO_SCHEMA_VERSION = 1;
    save that stamps the number writes that store down first. `settings` is
    never named: saveSettings IS the save doing the flushing.
 
-   Version 1 is the first shape, so there are no rungs yet. The next one
-   looks like:
-     2: function(){ roster.forEach(function(w){ ... }); proSchemaDirty.add('roster'); } */
-const PRO_MIGRATIONS = {};
+   Version 1 was settings alone: {schemaVersion, boss:{id, name}}.
+   Version 2 adds the roster and the jobs, each an array of records. */
+const PRO_MIGRATIONS = {
+  /* 1 -> 2: nothing to convert. Version 1 never wrote the roster or the jobs,
+     and an absent store reads as empty, so the data is already in shape.
+     The rung is here so the number tells the two builds apart: a version 1
+     build that somehow opens version 2 data shows its newer-version gate
+     instead of carrying on. The next rung is the first that changes data,
+     and it names the store it changed:
+       3: function(){ roster.forEach(function(w){ ... }); proSchemaDirty.add('roster'); } */
+  2: function(){}
+};
 const proSchemaDirty = new Set();
 
 /* Absent means version 1. Anything that is not a sane number reads the same
@@ -1301,6 +1336,15 @@ function saveStore(k, value, opts){
       console.warn('Notebuilt Pro: refused to write settings with no ID over settings that have one');
       return false;
     }
+    /* The roster and the jobs only ever grow: nothing is deleted, only
+       archived. A write that would shorten one is a bug or a wipe. */
+    if((k===K.roster || k===K.jobs) && current!=null && !opts.replace){
+      const cur = parse(current);
+      if(Array.isArray(cur) && Array.isArray(value) && value.length<cur.length){
+        console.warn('Notebuilt Pro: refused to write a shorter list over '+k);
+        return false;
+      }
+    }
     if(current!=null) localStorage.setItem(k+'__bak', current);   /* backup before any write (Tier 1) */
     localStorage.setItem(k, JSON.stringify(value));
     unreadable.delete(k);
@@ -1308,10 +1352,52 @@ function saveStore(k, value, opts){
   }catch(e){ console.warn('Notebuilt Pro: save failed', e); return false; }
 }
 
+/* ---------- crew and jobs: the record shapes ----------
+   A worker is {id, name, note, archived, createdAt, updatedAt}; a job is the
+   same with `address` in place of `note`. The id is permanent: minted once by
+   the component when the record is made, and never changed by an edit. Times
+   are epoch seconds. Nothing is ever deleted, only archived, because a list
+   already sent still names the worker and the job by id.
+
+   cleanRecord is the ONE judge of a record, for what is loaded from this
+   phone and for what a backup file carries. It returns the record in a fixed
+   key order, with unknown keys dropped, or null. */
+const NOTE_MAX = 120, ADDRESS_MAX = 160;
+const KINDS = {
+  worker:{ key:'roster', extra:'note', extraMax:NOTE_MAX, max:1000 },
+  job:{ key:'jobs', extra:'address', extraMax:ADDRESS_MAX, max:2000 }
+};
+const BAD_LINE_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+function lineOk(s, max){ return typeof s==='string' && Array.from(s).length<=max && !BAD_LINE_RE.test(s); }
+function timeOk(n){ return typeof n==='number' && Number.isInteger(n) && n>=0 && n<=4102444800; }
+function cleanRecord(kind, o){
+  const k = KINDS[kind];
+  if(!isObj(o) || typeof o.id!=='string' || typeof o.name!=='string' || !bossValid(o.id, o.name).ok) return null;
+  const extra = o[k.extra]===undefined ? '' : o[k.extra];
+  if(!lineOk(extra, k.extraMax)) return null;
+  if(o.archived!==undefined && typeof o.archived!=='boolean') return null;
+  if(!timeOk(o.createdAt) || !timeOk(o.updatedAt)) return null;
+  const r = { id:o.id, name:o.name };
+  r[k.extra] = extra; r.archived = !!o.archived; r.createdAt = o.createdAt; r.updatedAt = o.updatedAt;
+  return r;
+}
+function cleanRecords(kind, arr){
+  if(!Array.isArray(arr) || arr.length>KINDS[kind].max) return null;
+  const seen = new Set(), out = [];
+  for(const o of arr){
+    const r = cleanRecord(kind, o);
+    if(!r || seen.has(r.id)) return null;        /* one bad record, or one id twice, refuses the lot */
+    seen.add(r.id); out.push(r);
+  }
+  return out;
+}
+
 let settings = loadStore(K.settings, settingsOk, ()=>({}));
-let roster = loadStore(K.roster, Array.isArray, ()=>[]);
-let jobs = loadStore(K.jobs, Array.isArray, ()=>[]);
-const persist = { roster:()=>saveStore(K.roster, roster), jobs:()=>saveStore(K.jobs, jobs) };
+let roster = cleanRecords('worker', loadStore(K.roster, v=>!!cleanRecords('worker', v), ()=>[]));
+let jobs = cleanRecords('job', loadStore(K.jobs, v=>!!cleanRecords('job', v), ()=>[]));
+const write = { roster:opts=>saveStore(K.roster, roster, opts), jobs:opts=>saveStore(K.jobs, jobs, opts) };
+/* A store whose unreadable original the user chose to replace. */
+const startedFresh = new Set();
 /* Read at load. It migrates in memory only; the number waits for the next
    ordinary save to be stamped. */
 proApplySchema(proSchemaOf(settings));
@@ -1324,7 +1410,7 @@ function saveSettings(opts){
      turns a retryable failure into a rung skipped forever. */
   if(proSchemaDirty.size){
     for(const name of proSchemaDirty){
-      if(name!=='settings' && persist[name] && !persist[name]()){
+      if(name!=='settings' && write[name] && !write[name]()){
         console.warn('Notebuilt Pro: migrated data would not persist, so the schema number is held back');
         return false;
       }
@@ -1343,17 +1429,41 @@ function saveSettings(opts){
   return true;
 }
 
+/* A roster or jobs save, from a tap. The data goes down first; then, if the
+   number on this phone is behind the shape just written, the same tap stamps
+   it. The stamp follows the data, it never leads it. */
+function commit(name){
+  if(schemaFromFuture) return false;
+  const key = K[name], fresh = startedFresh.has(key);
+  if(!write[name](fresh ? { replace:true } : undefined)) return false;
+  startedFresh.delete(key);
+  if(settings.schemaVersion!==proSchemaReached) saveSettings();
+  return true;
+}
+
 /* ---------- IndexedDB: opened only when something needs it, never at startup ---------- */
 function idbOpen(){
   return new Promise((resolve, reject)=>{
     let req;
     try{ req = indexedDB.open(IDB_NAME, IDB_VERSION); }catch(e){ reject(e); return; }
-    /* The store ladder. Each step runs once, for a database older than it. */
+    /* The store ladder. Each step runs once, for a database older than it.
+         1: lists, keyed by listId. One record is the boss's full list for one
+            job's day, with its sent map.
+         2: reports, keyed by listId AND workerId: one record per worker per
+            list, so two workers' reports never share a record. Version 1
+            keyed it by listId alone and never wrote to it. The old store is
+            dropped only after counting it empty; if it somehow holds
+            anything, the upgrade aborts and nothing is touched. */
     req.onupgradeneeded = function(ev){
-      const db = req.result;
-      if(ev.oldVersion < 1){
-        db.createObjectStore('lists', { keyPath:'listId' });
-        db.createObjectStore('reports', { keyPath:'listId' });
+      const db = req.result, tx = req.transaction;
+      if(ev.oldVersion < 1) db.createObjectStore('lists', { keyPath:'listId' });
+      if(ev.oldVersion < 2){
+        const make = ()=>db.createObjectStore('reports', { keyPath:['listId','workerId'] });
+        if(!db.objectStoreNames.contains('reports')) make();
+        else {
+          const c = tx.objectStore('reports').count();
+          c.onsuccess = ()=>{ if(c.result>0){ tx.abort(); return; } db.deleteObjectStore('reports'); make(); };
+        }
       }
     };
     req.onsuccess = ()=>resolve(req.result);
@@ -1443,9 +1553,18 @@ const HELP_COPY = {
   guide:{ title:'Beginner mode',
     body:['The small (i) markers explain what things do. Turn Beginner mode off once you know your way around and they all disappear; nothing else changes.',
           'This is saved on this phone only. It isn’t part of a backup.'] },
-  today:{ title:'What’s here so far',
-    body:['This build holds your name and your permanent ID, keeps them backed up, and is ready for the rest.',
-          'Your crew, your jobs and the day’s lists arrive in the next builds.'] }
+  today:{ title:'Setting up',
+    body:['Add the people you send lists to, and the jobs you send them for. Each gets a permanent ID the first time you save it.',
+          'The day\u2019s lists and sending arrive in the next build.'] },
+  crew:{ title:'Your crew',
+    body:['Everyone you might send a list to. Each person gets a permanent ID when you add them, and renaming keeps it.',
+          'The note is for you: a trade, a phone number. It stays on this phone and is never sent.',
+          'Archiving takes someone off the list without deleting them. They stay on lists already sent, and you can bring them back from Archived.',
+          'A long name leaves less room in a link for tasks, so I warn while you type. The warning never stops you saving.'] },
+  jobs:{ title:'Your jobs',
+    body:['Each job has a name and, if you like, an address. Your crew sees the job\u2019s name on every list for it. The address stays on this phone.',
+          'Each job gets a permanent ID when you add it, and renaming keeps it.',
+          'Archiving takes a finished job off the list without deleting it. You can bring it back from Archived.'] }
 };
 function openHelp(key){
   const h = HELP_COPY[key]; if(!h) return;
@@ -1463,7 +1582,7 @@ function openHelp(key){
    Every history mutation queues behind an in-flight history.go(). The hash
    and the remembered view are untrusted input: a view is one of a constant
    set or it is Home. */
-const NAV_VIEWS = new Set(['home','settings','support','privacy']);
+const NAV_VIEWS = new Set(['home','crew','jobs','settings','support','privacy']);
 const NAV_ROOT = 'home';
 const NAV_EXIT_MS = 2000;
 let view = NAV_ROOT;
@@ -1531,7 +1650,7 @@ function navArmExit(){
 /* A cold stack: seeded once, at the first render past the gates. The parent
    chain is used ONLY to seed. Back never consults it. */
 function navSeed(){
-  const chain = view===NAV_ROOT ? [NAV_ROOT] : (view==='settings' ? [NAV_ROOT,'settings'] : [NAV_ROOT,'settings',view]);
+  const chain = view===NAV_ROOT ? [NAV_ROOT] : ((view==='support'||view==='privacy') ? [NAV_ROOT,'settings',view] : [NAV_ROOT,view]);
   history.replaceState({ np:1, g:1, d:0, v:NAV_ROOT }, '', navHash(NAV_ROOT));
   chain.forEach((v,i)=>history.pushState(navEntry(v,i+1), '', navHash(v)));
   _navBase = chain.length;
@@ -1660,7 +1779,7 @@ function renderGate(g){
   return '<div class="setup">'+head
     +'<p class="lede">Task lists for your crew, sent by text. Nothing leaves this phone unless you send it.</p>'
     +secHead('Your name','name')
-    +'<input class="input" id="boss-name" data-name-input type="text" autocomplete="name" autocapitalize="words" enterkeyhint="done" placeholder="Your name" aria-label="Your name">'
+    +'<input class="input" id="boss-name" data-name-input data-role="boss" data-msg="name-msg" type="text" autocomplete="name" autocapitalize="words" enterkeyhint="done" placeholder="Your name" aria-label="Your name">'
     +'<div class="field-msg" id="name-msg" aria-live="polite"></div>'
     +'<button class="btn primary block" data-action="setup-save">Continue</button>'
     +'<p class="fine">Your crew sees this name on every list you send. You can change it later in Settings.</p>'
@@ -1677,8 +1796,12 @@ function renderHome(){
     +secHead('You','name')
     +'<div class="card"><div style="font-family:var(--serif);font-size:19px">'+esc(settings.boss.name)+'</div>'
     +'<div class="sub" style="margin-top:4px">Your name and permanent ID are set on this phone.</div></div>'
-    +secHead('Lists','today')
-    +'<div class="card prose">Nothing to send yet. Your crew, your jobs and the day’s lists arrive in the next builds.</div>'
+    +secHead('Set up','today')
+    +'<div class="list">'
+    +'<button data-go="crew"><span class="grow">Crew<br><span class="sub" id="home-crew">'+esc(countLine('worker'))+'</span></span><span class="chev">'+I.chevronR+'</span></button>'
+    +'<button data-go="jobs"><span class="grow">Jobs<br><span class="sub" id="home-jobs">'+esc(countLine('job'))+'</span></span><span class="chev">'+I.chevronR+'</span></button>'
+    +'</div>'
+    +'<div class="card prose">The day\u2019s lists and sending arrive in the next build.</div>'
     +versionStamp()+'</div>';
 }
 function topbar(title){
@@ -1702,12 +1825,129 @@ function renderSettings(){
     +'<button data-go="support"><span class="grow">Support &amp; Backup<br><span class="sub">Save a backup file, restore one, and how EGS works.</span></span><span class="chev">'+I.chevronR+'</span></button>'
     +'<button data-go="privacy"><span class="grow">Privacy<br><span class="sub">What I collect (nothing) and where your data lives.</span></span><span class="chev">'+I.chevronR+'</span></button>'
     +'</div>'
-    /* EGS-STD:apps-directory */
     +secHead('More EGS apps')
     +'<div class="list">'+EGS_APPS.map(a=>a.url
       ? '<a href="'+esc(a.url)+'" target="_blank" rel="noopener"><span class="grow">'+esc(a.name)+'<br><span class="sub">'+esc(a.line)+'</span></span><span class="chev">'+I.chevronR+'</span></a>'
       : '<div><span class="grow">'+esc(a.name)+'<br><span class="sub">'+esc(a.line)+' Coming soon.</span></span></div>').join('')+'</div>'
     +versionStamp()+'</div>';
+}
+
+/* ============================================================
+   Crew and Jobs — one screen, one sheet, two kinds of record
+   ============================================================ */
+const UI = {
+  worker:{ view:'crew', title:'Crew', help:'crew', add:'Add a worker', edit:'Edit worker', things:'crew',
+           extraLabel:'Note (optional)', extraHint:'Trade, phone\u2026 (optional)', extraWord:'A note',
+           empty:'Nobody yet. Add the people you send lists to.',
+           none:'Nobody yet.', one:'1 person', many:n=>n+' people' },
+  job:{ view:'jobs', title:'Jobs', help:'jobs', add:'Add a job', edit:'Edit job', things:'jobs',
+        extraLabel:'Address (optional)', extraHint:'Address (optional)', extraWord:'An address',
+        empty:'No jobs yet. Add the jobs you send lists for.',
+        none:'No jobs yet.', one:'1 job', many:n=>n+' jobs' }
+};
+function recordsOf(kind){ return kind==='worker' ? roster : jobs; }
+function setRecords(kind, list){ if(kind==='worker') roster = list; else jobs = list; }
+function countLine(kind){
+  const n = recordsOf(kind).filter(r=>!r.archived).length, u = UI[kind];
+  return n===0 ? u.none : (n===1 ? u.one : u.many(n));
+}
+/* Sorted for display by name, ties broken by id. Stored order is the order
+   things were added in, which is nobody's chosen order, so it is never shown. */
+function byName(a, b){
+  return a.name.localeCompare(b.name, undefined, { sensitivity:'base' }) || (a.id<b.id ? -1 : a.id>b.id ? 1 : 0);
+}
+function recordRow(kind, r){
+  const extra = r[KINDS[kind].extra];
+  return '<button data-action="rec-edit" data-kind="'+kind+'" data-id="'+esc(r.id)+'"><span class="grow"><span class="rec-name">'+esc(r.name)+'</span>'
+    +(extra ? '<br><span class="sub rec-extra">'+esc(extra)+'</span>' : '')+'</span><span class="chev">'+I.chevronR+'</span></button>';
+}
+function renderRecords(kind){
+  const u = UI[kind], key = K[KINDS[kind].key];
+  if(unreadable.has(key)){
+    /* Both copies on this phone failed the check. They are left alone, and
+       nothing is drawn from them. */
+    return topbar(u.title)+'<div class="wrap">'+secHead(u.title, u.help)
+      +'<div class="card prose">I can\u2019t read the '+esc(u.things)+' saved on this phone, so I\u2019ve left it untouched. Restoring a backup brings it back.</div>'
+      +'<button class="btn block" data-go="support">Support &amp; Backup</button>'
+      +'<button class="btn danger block" style="margin-top:12px" data-action="store-fresh" data-kind="'+kind+'">Start again with none</button>'
+      +versionStamp()+'</div>';
+  }
+  const all = recordsOf(kind).slice().sort(byName), live = all.filter(r=>!r.archived), gone = all.filter(r=>r.archived);
+  return topbar(u.title)+'<div class="wrap">'+secHead(u.title, u.help)
+    +'<button class="btn primary block" data-action="rec-add" data-kind="'+kind+'">'+esc(u.add)+'</button>'
+    +(live.length ? '<div class="list" id="rec-list" style="margin-top:12px">'+live.map(r=>recordRow(kind, r)).join('')+'</div>'
+                  : '<div class="card prose" style="margin-top:12px">'+esc(u.empty)+'</div>')
+    +(gone.length ? secHead('Archived')+'<div class="list" id="rec-archived">'+gone.map(r=>recordRow(kind, r)).join('')+'</div>' : '')
+    +versionStamp()+'</div>';
+}
+function openRecord(kind, id){
+  const u = UI[kind], k = KINDS[kind];
+  const r = id ? recordsOf(kind).find(x=>x.id===id) : null;
+  if(id && !r) return;
+  const tag = ' data-kind="'+kind+'" data-id="'+esc(r?r.id:'')+'"';
+  sheet(helpMark(u.help, true)+'<h2>'+esc(r?u.edit:u.add)+'</h2>'
+    +'<input class="input" id="rec-name" data-name-input data-role="'+kind+'" data-msg="rec-name-msg" data-exclude="'+esc(r?r.id:'')+'" type="text" autocapitalize="words" enterkeyhint="done" placeholder="Name" aria-label="Name" value="'+esc(r?r.name:'')+'">'
+    +'<div class="field-msg" id="rec-name-msg" aria-live="polite"></div>'
+    +'<input class="input" id="rec-extra" style="margin-top:10px" type="text" enterkeyhint="done" placeholder="'+esc(u.extraHint)+'" aria-label="'+esc(u.extraLabel)+'" value="'+esc(r?r[k.extra]:'')+'">'
+    +'<div class="field-msg bad" id="rec-extra-msg" aria-live="polite"></div>'
+    +'<button class="btn primary block" data-action="rec-save"'+tag+'>Save</button>'
+    +(r ? (r.archived ? '<button class="btn block" data-action="rec-unarchive"'+tag+'>Bring back</button>'
+                      : '<button class="btn danger block" data-action="rec-archive"'+tag+'>Archive</button>') : ''));
+  if(r) onNameInput(document.getElementById('rec-name'));
+}
+function nowSec(){ return Math.floor(Date.now()/1000); }
+/* Put a changed list down. On failure the list in memory goes back to what
+   the phone still holds, and the caller says so. */
+function putRecords(kind, next){
+  const before = recordsOf(kind);
+  setRecords(kind, next);
+  if(commit(KINDS[kind].key)) return true;
+  setRecords(kind, before);
+  return false;
+}
+async function saveRecord(kind, id){
+  const k = KINDS[kind], u = UI[kind];
+  const input = document.getElementById('rec-name'), extraEl = document.getElementById('rec-extra');
+  if(!input || !extraEl) return;
+  const seq = ++_nameSeq;
+  const r = await nameCheck(input.value, kind, id||null);
+  if(seq!==_nameSeq) return;
+  const el = document.getElementById('rec-name-msg'), xel = document.getElementById('rec-extra-msg');
+  if(r.level==='empty'){ showNameResult(el, { level:'bad', msg:'Type a name first.' }); input.focus(); return; }
+  if(r.level==='bad'){ showNameResult(el, r); input.focus(); return; }
+  const extra = extraEl.value.trim();
+  if(!lineOk(extra, k.extraMax)){ xel.textContent = u.extraWord+' can be up to '+k.extraMax+' characters, on one line.'; extraEl.focus(); return; }
+  xel.textContent = '';
+  const list = recordsOf(kind), old = id ? list.find(x=>x.id===id) : null;
+  if(id && !old) return;
+  if(old && old.name===r.name && old[k.extra]===extra){ closeSheet(); return; }     /* nothing changed, nothing written */
+  const t = nowSec();
+  /* The id is minted here, once, and an edit copies it across untouched. */
+  const rec = cleanRecord(kind, Object.assign({ id:old?old.id:EGSCrew.newId(), name:r.name, archived:old?old.archived:false,
+                                               createdAt:old?old.createdAt:t, updatedAt:t }, { [k.extra]:extra }));
+  if(!rec || !putRecords(kind, old ? list.map(x=>x.id===id?rec:x) : list.concat([rec]))){
+    showNameResult(el, { level:'bad', msg:'I couldn\u2019t save that on this phone. Nothing was changed.' });
+    return;
+  }
+  closeSheet(); render(); toast(old ? 'Saved' : 'Added');
+  askPersist();
+}
+function setArchived(kind, id, flag){
+  const list = recordsOf(kind), old = list.find(x=>x.id===id);
+  if(!old || old.archived===flag) return;
+  /* Archiving is this app's delete, so it asks first. Nothing is removed. */
+  if(flag && !confirm('Archive '+old.name+'? Nothing is deleted. '+(kind==='worker'
+      ? 'They stay on lists already sent, and you can bring them back from Archived.'
+      : 'It stays on lists already sent, and you can bring it back from Archived.'))) return;
+  const rec = Object.assign({}, old, { archived:flag, updatedAt:nowSec() });
+  if(!putRecords(kind, list.map(x=>x.id===id?rec:x))){ toast('I couldn\u2019t save that on this phone.'); return; }
+  closeSheet(); render(); toast(flag ? 'Archived' : 'Brought back');
+}
+function storeFresh(kind){
+  const key = K[KINDS[kind].key];
+  if(!confirm('Start again with no '+UI[kind].things+'? What is saved on this phone can\u2019t be read, and it is replaced the first time you add one.')) return;
+  unreadable.delete(key); startedFresh.add(key);
+  render();
 }
 
 /* EGS-STD:privacy-page — self-contained, offline, the whole-truth pattern. */
@@ -1717,7 +1957,7 @@ function renderPrivacy(){
     +secHead('What I collect')
     +card('Nothing. No account, no sign-up, no email. I don’t know who you are or who is on your crew, and I don’t track what you do in this app.')
     +secHead('Where your data lives')
-    +card('On this phone only: your name, your ID and, as they arrive, your crew, jobs and lists. I never receive a copy. There’s no server for it to go to.')
+    +card('On this phone only: your name, your ID, your crew and your jobs, and later your lists. I never receive a copy. There’s no server for it to go to.')
     +secHead('When this app touches the internet')
     +card('To load the app itself from GitHub Pages. GitHub sees what any web server sees, such as your IP address and browser type, and none of your data goes with that request. Offline, the app runs from its own copy on this phone.<br><br>'
       +'<b>Lists and reports travel in your own text messages.</b> A list is a link, and the list itself sits in the part of the link after the <span class="mono">#</span>. Browsers never send that part to any server, so GitHub never sees crew data. A list or a report is exactly as private as the text message carrying it.<br><br>'
@@ -1860,7 +2100,8 @@ function egsSupportCoreHtml(tabs){
     <div class="card" style="margin-top:18px;text-align:center;font-family:var(--mono);font-size:11px;letter-spacing:.05em;color:var(--paper-faint)">Built by one person in Canada \u00b7 no shareholders, no ads, ever<br>Contributions are voluntary. Every bit helps keep EGS independent. Thank you.</div>`;
 }
 
-const VIEW_RENDER = { home:renderHome, settings:renderSettings, support:renderSupport, privacy:renderPrivacy };
+const VIEW_RENDER = { home:renderHome, crew:()=>renderRecords('worker'), jobs:()=>renderRecords('job'),
+                      settings:renderSettings, support:renderSupport, privacy:renderPrivacy };
 function render(){
   const g = gate();
   if(g){ $app.innerHTML = renderGate(g); $banners.innerHTML = ''; return; }
@@ -1885,7 +2126,7 @@ function settingsNameNote(){
    first name. Renaming never touches it. A restore replaces it with the
    file's, which is the same one if the file came from this boss. */
 let _nameSeq = 0;
-function nameMsgEl(input){ return document.getElementById(input.id==='edit-name' ? 'edit-name-msg' : 'name-msg'); }
+function nameMsgEl(input){ return document.getElementById(input.dataset.msg || 'name-msg'); }
 function showNameResult(el, r){
   if(!el) return;
   el.className = 'field-msg'+(r.level==='bad'?' bad':(r.level==='tight'||r.level==='none')?' warn':'');
@@ -1894,7 +2135,8 @@ function showNameResult(el, r){
 /* The warning appears while typing, not at save. */
 function onNameInput(input){
   const seq = ++_nameSeq;
-  nameCheck(input.value).then(r=>{ if(seq===_nameSeq) showNameResult(nameMsgEl(input), r); }).catch(()=>{});
+  nameCheck(input.value, input.dataset.role || 'boss', input.dataset.exclude || null)
+    .then(r=>{ if(seq===_nameSeq) showNameResult(nameMsgEl(input), r); }).catch(()=>{});
 }
 async function saveName(input){
   if(!input) return;
@@ -1918,7 +2160,7 @@ async function saveName(input){
 }
 function openEditName(){
   sheet(helpMark('name', true)+'<h2>Your name</h2>'
-    +'<input class="input" id="edit-name" data-name-input type="text" autocomplete="name" autocapitalize="words" enterkeyhint="done" aria-label="Your name" value="'+esc(settings.boss.name)+'">'
+    +'<input class="input" id="edit-name" data-name-input data-role="boss" data-msg="edit-name-msg" type="text" autocomplete="name" autocapitalize="words" enterkeyhint="done" aria-label="Your name" value="'+esc(settings.boss.name)+'">'
     +'<div class="field-msg" id="edit-name-msg" aria-live="polite"></div>'
     +'<p class="muted" style="margin-top:10px;font-size:13px">Changing your name keeps your ID, so lists you’ve already sent still match.</p>'
     +'<button class="btn primary block" data-action="name-save">Save</button>');
@@ -1945,6 +2187,8 @@ async function buildBackup(){
            appVersion:String(window.EGS_VERSION||'dev'), settings:settings, roster:roster, jobs:jobs, crew:crew };
 }
 async function doExport(){
+  /* A store this phone can't read would go into the file as empty. */
+  if(unreadable.size){ toast('I can\u2019t read everything saved on this phone, so I didn\u2019t make a backup that would be missing it.'); return false; }
   let payload;
   try{ payload = await buildBackup(); }
   catch(e){ toast('I couldn’t read everything, so I didn’t make a backup that would be missing some of it.'); return false; }
@@ -1976,19 +2220,22 @@ function readBackup(text){
     return no('That backup doesn’t check out, so I didn’t use any of it.');
   if(proSchemaOf(s)>PRO_SCHEMA_VERSION) return no('That backup was made by a newer version of '+APP_NAME+'. Update the app, then restore it.');
   if(!bossValid(s.boss.id, s.boss.name).ok) return no('The name or ID in that backup doesn’t check out, so I didn’t use any of it.');
-  /* Crew, jobs and lists have no shape in this build, so there is nothing to
-     check them against. A file that carries any is refused whole rather
-     than stored unchecked. The build that adds each one adds its check. */
-  if(!Array.isArray(o.roster) || !Array.isArray(o.jobs)) return no('That backup doesn’t check out, so I didn’t use any of it.');
+  /* The crew and the jobs go through the same judge as the copies on this
+     phone. One bad record, or one id twice, refuses the whole file. */
+  const ros = cleanRecords('worker', o.roster), jb = cleanRecords('job', o.jobs);
+  if(!ros || !jb) return no('Someone on the crew or one of the jobs in that backup doesn\u2019t check out, so I didn\u2019t use any of it.');
+  /* Lists and reports have no shape in this build, so there is nothing to
+     check them against. A file that carries any is refused whole rather than
+     stored unchecked. The build that adds them adds their check. */
   let crew = null;
   if(o.crew!==undefined){
-    if(!isObj(o.crew) || !IDB_STORES.every(n=>Array.isArray(o.crew[n]))) return no('That backup doesn’t check out, so I didn’t use any of it.');
+    if(!isObj(o.crew) || !IDB_STORES.every(n=>Array.isArray(o.crew[n]))) return no('That backup doesn\u2019t check out, so I didn\u2019t use any of it.');
     crew = {}; IDB_STORES.forEach(n=>{ crew[n] = o.crew[n]; });
   }
-  if(o.roster.length || o.jobs.length || (crew && IDB_STORES.some(n=>crew[n].length)))
-    return no('That backup holds crew, jobs or lists, which this version can’t check yet, so I didn’t use any of it. Update the app, then restore it.');
+  if(crew && IDB_STORES.some(n=>crew[n].length))
+    return no('That backup holds lists or reports, which this version can\u2019t check yet, so I didn\u2019t use any of it. Update the app, then restore it.');
   const when = (typeof o.exportedAt==='string' && o.exportedAt.length<=40 && Date.parse(o.exportedAt)) ? new Date(Date.parse(o.exportedAt)).toISOString() : null;
-  return { ok:true, schema:proSchemaOf(s), boss:{ id:s.boss.id, name:s.boss.name }, crew:crew, exportedAt:when };
+  return { ok:true, schema:proSchemaOf(s), boss:{ id:s.boss.id, name:s.boss.name }, roster:ros, jobs:jb, crew:crew, exportedAt:when };
 }
 async function doRestore(file){
   if(!file) return;
@@ -1998,25 +2245,35 @@ async function doRestore(file){
   const b = readBackup(text);
   if(!b.ok){ restoreRefused(b.reason); return; }
   /* Restore replaces, so it asks first whenever there is anything to replace. */
-  if(hasIdentity(settings) || unreadable.has(K.settings)){
+  if(hasIdentity(settings) || unreadable.size || roster.length || jobs.length){
     const same = hasIdentity(settings) && settings.boss.id===b.boss.id;
-    if(!confirm('Restore this backup? It REPLACES what’s on this phone with what’s in the file ('+b.boss.name+').'
+    const live = l=>l.filter(r=>!r.archived).length;
+    if(!confirm('Restore this backup? It REPLACES what\u2019s on this phone with what\u2019s in the file: '+b.boss.name
+      +', '+live(b.roster)+' on the crew, '+live(b.jobs)+' jobs.'
       +(same?'':' The ID in the file is different from the one on this phone.'))) return;
   }
-  /* A backup with no crew section leaves this phone's crew data as it is
-     (spec rule 8). One with a section replaces it, before the settings, so a
-     failure here leaves the name and ID untouched. */
+  /* A backup with no crew section leaves this phone's lists and reports as
+     they are (spec rule 8). One with a section replaces them, first, so a
+     failure here leaves everything else untouched. */
   if(b.crew){
     try{ await idbReplace(b.crew); }
-    catch(e){ restoreRefused('I couldn’t write to this phone’s storage, so nothing was restored.'); return; }
+    catch(e){ restoreRefused('I couldn\u2019t write to this phone\u2019s storage, so nothing was restored.'); return; }
   }
-  const before = settings, wasFuture = schemaFromFuture, reached = proSchemaReached;
-  settings = { boss:b.boss };
+  /* Data before the number that describes it: crew, jobs, then settings,
+     which carries the stamp. If any write fails, the ones already made are
+     put back from what was there. An empty store that was never written
+     stays unwritten, so a round trip leaves the same keys behind. */
+  const was = { settings:settings, roster:roster, jobs:jobs, future:schemaFromFuture, reached:proSchemaReached,
+                raw:{ roster:lsGet(K.roster), jobs:lsGet(K.jobs) } };
+  roster = b.roster; jobs = b.jobs; settings = { boss:b.boss };
   proApplySchema(b.schema);       /* the number is read off the restored data, never carried over */
-  if(!saveSettings({ replace:true })){
-    settings = before; schemaFromFuture = wasFuture; proSchemaReached = reached;
-    restoreRefused('I couldn’t write to this phone’s storage, so nothing was restored.'); return;
+  const put = name=>((name==='roster'?roster:jobs).length===0 && was.raw[name]==null) || write[name]({ replace:true });
+  if(!(put('roster') && put('jobs') && saveSettings({ replace:true }))){
+    roster = was.roster; jobs = was.jobs; settings = was.settings; schemaFromFuture = was.future; proSchemaReached = was.reached;
+    ['roster','jobs'].forEach(name=>{ if(was.raw[name]!=null && lsGet(K[name])!==was.raw[name]) lsSet(K[name], was.raw[name]); });
+    restoreRefused('I couldn\u2019t write to this phone\u2019s storage, so nothing was restored.'); return;
   }
+  startedFresh.clear();
   if(b.exportedAt) lsSet(DEVICE.lastBackup, b.exportedAt);
   if(sheetIsOpen()) closeSheet();
   if(navState() && navState().unseeded){ view = NAV_ROOT; render(); window.scrollTo(0,0); }
@@ -2039,21 +2296,33 @@ window.addEventListener('appinstalled', ()=>{ deferredInstall = null; lsSet(DEVI
 function isStandalone(){ return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone===true; }
 function isIOS(){ return /iphone|ipad|ipod/i.test(navigator.userAgent); }
 function installBannerWanted(){ return !isStandalone() && !lsGet(DEVICE.install); }
-/* EGS-STD:backup — the nudge. Two dials: it first appears when the last
-   backup is 21+ days old or there has never been one, and dismissing it
-   snoozes it 7 days. Only when there is something real to lose.
+/* EGS-STD:backup — the nudge. It needs real data on the phone, and then one
+   of two things:
 
-   A name is not that. Real data is crew, jobs or lists, and a list cannot
-   exist without a worker and a job, so those two answer for all three
-   without opening IndexedDB at startup. Nothing writes either store until
-   stage 2, so in this build the nudge never appears. */
+     * the backup is 21 or more days overdue. With a backup on record, that
+       is 21 days since it. With none, the clock starts when the oldest
+       worker or job was added: a crew made this morning is not overdue.
+     * the browser has not agreed to keep this app's storage, so it may clear
+       it. That is a risk today, however new the data is.
+
+   Dismissing it snoozes it 7 days. A name is not real data: crew, jobs or
+   lists are, and a list cannot exist without a worker and a job, so those
+   two answer for all three without opening IndexedDB at startup. */
 function hasRealData(){ return roster.length>0 || jobs.length>0; }
+function dataSince(){
+  let t = Infinity;
+  roster.concat(jobs).forEach(r=>{ if(r.createdAt<t) t = r.createdAt; });
+  return t===Infinity ? 0 : t*1000;
+}
 let persistedOk = null;
+function backupOverdue(){
+  const last = Date.parse(lsGet(DEVICE.lastBackup)||'') || 0;
+  return (Date.now() - (last || dataSince())) > 21*86400000;
+}
 function backupNudgeWanted(){
   if(!hasRealData()) return false;
   if(Date.now() < +(lsGet(DEVICE.nudge)||0)) return false;
-  const last = Date.parse(lsGet(DEVICE.lastBackup)||'') || 0;
-  return !last || (Date.now()-last) > 21*86400000 || persistedOk===false;
+  return backupOverdue() || persistedOk===false;
 }
 /* EGS-STD:schema row 11 — ask the browser to keep this storage. Asked once
    there is something to keep, never on the first-run screen. */
@@ -2074,8 +2343,11 @@ function renderBanners(){
       +'<button class="btn sm" data-action="install-dismiss">Not now</button></div></div>';
   } else if(backupNudgeWanted()){
     const never = !Date.parse(lsGet(DEVICE.lastBackup)||'');
-    h = '<div class="banner"><b>'+(never?'No backup yet':'Time for a fresh backup')+'</b>'
-      +'Your crew, jobs and lists exist only on this phone. A backup file means a lost phone doesn’t lose them, or your ID.'
+    const head = backupOverdue() ? (never ? 'No backup yet' : 'Time for a fresh backup') : 'This browser may clear the app';
+    const body = backupOverdue()
+      ? 'Your crew and jobs exist only on this phone. A backup file means a lost phone doesn\u2019t lose them, or your ID.'
+      : 'Your browser hasn\u2019t agreed to keep this app\u2019s storage, so it can clear your crew and jobs when space runs short. Installing the app, or saving a backup file, protects them.';
+    h = '<div class="banner"><b>'+head+'</b>'+esc(body)
       +'<div class="acts"><button class="btn sm primary" data-action="export">Back up now</button>'
       +'<button class="btn sm" data-action="nudge-snooze">Later</button></div></div>';
   }
@@ -2104,12 +2376,19 @@ document.addEventListener('click', function(ev){
   }
   el = t.closest('[data-action]'); if(!el) return;
   const act = el.dataset.action;
+  if(/^rec-|^store-fresh$/.test(act) && !KINDS[el.dataset.kind]) return;
   if(act==='sheet-scrim'){ if(t===el) closeSheet(); }
   else if(act==='sheet-close'){ closeSheet(); }
   else if(act==='setup-save'){ saveName(document.getElementById('boss-name')); }
   else if(act==='name-save'){ saveName(document.getElementById('edit-name')); }
   else if(act==='edit-name'){ openEditName(); }
   else if(act==='start-fresh'){ startFresh(); }
+  else if(act==='rec-add'){ openRecord(el.dataset.kind, null); }
+  else if(act==='rec-edit'){ openRecord(el.dataset.kind, el.dataset.id); }
+  else if(act==='rec-save'){ saveRecord(el.dataset.kind, el.dataset.id || null); }
+  else if(act==='rec-archive'){ setArchived(el.dataset.kind, el.dataset.id, true); }
+  else if(act==='rec-unarchive'){ setArchived(el.dataset.kind, el.dataset.id, false); }
+  else if(act==='store-fresh'){ storeFresh(el.dataset.kind); }
   else if(act==='theme'){ setTheme(el.dataset.mode); render(); toast('Look: '+THEME_LABEL[themeMode()]); }
   else if(act==='guide'){ guideSet(!guideOn()); el.setAttribute('aria-checked', guideOn()?'true':'false'); }
   else if(act==='export'){ doExport(); }
@@ -2125,7 +2404,9 @@ document.addEventListener('input', function(ev){
 });
 document.addEventListener('keydown', function(ev){
   const t = ev.target;
-  if(ev.key==='Enter' && t instanceof Element && t.matches('[data-name-input]')){ ev.preventDefault(); saveName(t); }
+  if(ev.key!=='Enter' || !(t instanceof Element)) return;
+  if(t.matches('#rec-name, #rec-extra')){ ev.preventDefault(); const b = document.querySelector('[data-action="rec-save"]'); if(b) b.click(); }
+  else if(t.matches('[data-name-input]')){ ev.preventDefault(); saveName(t); }
 });
 document.addEventListener('change', function(ev){
   const t = ev.target;

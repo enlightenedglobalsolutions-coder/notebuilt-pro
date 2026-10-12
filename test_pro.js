@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Notebuilt Pro — the stage 1 gate, in a real browser.
+// Notebuilt Pro — the gate for stages 1 and 2, in a real browser.
 // Copyright (c) 2026 Enlightened Global Solutions. All rights reserved.
 //
 // Serves this folder on 127.0.0.1 and drives index.html in real headless
@@ -9,6 +9,7 @@
 //
 //   node test_pro.js                 exit 0 = every check passed
 //   node test_pro.js --shots <dir>   also write screenshots into <dir>
+//   node test_pro.js --bail          stop at the first failure (for mutation runs)
 //
 // The port is this app's fixed local-test port: a port is an origin, and a
 // service worker left on a shared one serves the wrong app.
@@ -24,8 +25,10 @@ const SHOTS = process.argv.indexOf('--shots') > 0 ? path.resolve(process.argv[pr
 const ID_RE = /^[A-Za-z0-9_-]{21}[AQgw]$/;
 const TYPES = { '.html':'text/html; charset=utf-8', '.js':'text/javascript', '.webmanifest':'application/manifest+json', '.png':'image/png', '.svg':'image/svg+xml' };
 
-let fails = 0, passes = 0;
-const ok = (c, label, extra) => { if(c) passes++; else fails++; console.log((c ? '  PASS ' : '  FAIL ') + label + (extra !== undefined && (!c || extra === true) ? '' : '') + (!c && extra !== undefined ? '  → ' + extra : '')); };
+const BAIL = process.argv.includes('--bail');
+let fails = 0, passes = 0, bailed = false;
+const ok = (c, label, extra) => { if(c) passes++; else fails++; console.log((c ? '  PASS ' : '  FAIL ') + label + (!c && extra !== undefined ? '  → ' + extra : ''));
+  if(!c && BAIL && !bailed){ bailed = true; setTimeout(() => finish(1), 0); } };
 const section = t => console.log('\n== ' + t + ' ==');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -45,8 +48,9 @@ const HTML = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const mk = spawnSync(process.execPath, [path.join(ROOT, 'make_icons.js'), '--check-mark'], { encoding:'utf8' });
   ok(mk.status === 0, 'PRO_MARK matches the icon geometry in make_icons.js', (mk.stdout || '').trim());
   ok(!/onclick=/.test(HTML), 'no inline onclick anywhere');
-  ['skeleton','coldopen-version','install-banner','share-v2','backup','privacy-page','apps-directory','schema','themes','infomode','support']
+  ['skeleton','coldopen-version','install-banner','share-v2','backup','privacy-page','schema','themes','infomode','support']
     .forEach(m => ok(HTML.indexOf('EGS-STD:' + m) >= 0, 'marker EGS-STD:' + m));
+  ok(HTML.indexOf('EGS-STD:apps-directory') < 0 && HTML.indexOf('EGS-STD:gate') < 0, 'no marker on a row the app does not meet: apps-directory (no deploy sync exists) and gate (no price yet)');
   const keys = HTML.match(/'notebuiltpro[^']*'/g) || [];
   ok(keys.length >= 9 && keys.every(k => k === "'notebuiltpro'" || k.indexOf("'notebuiltpro.") === 0), 'every storage name is notebuiltpro or notebuiltpro.*');
   const man = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.webmanifest'), 'utf8'));
@@ -71,7 +75,7 @@ const finish = code => {
   const done = () => { [prof, work].forEach(d => { try { fs.rmSync(d, { recursive:true, force:true, maxRetries:5 }); } catch(e){} }); process.exit(code); };
   if(chrome){ chrome.once('exit', done); chrome.kill(); } else done();
 };
-setTimeout(() => { console.log('FAIL timed out'); finish(1); }, 240000);
+setTimeout(() => { console.log("FAIL timed out"); finish(1); }, 480000);
 
 srv.listen(WEB, '127.0.0.1', () => run().catch(e => { console.log('FAIL ' + (e && e.stack || e)); finish(1); }));
 srv.on('error', e => { console.log('FAIL cannot serve on 127.0.0.1:' + WEB + ' (' + e.code + ')'); process.exit(1); });
@@ -147,6 +151,18 @@ async function run(){
   const setup = async name => { await wipe(); await load(); await type('#boss-name', name); await click('[data-action="setup-save"]');
     await until('!!document.querySelector(".topbar")', 8000, 'home after setup'); };
 
+  const closed = what => until('!document.getElementById("sheet-root").innerHTML', 5000, what || 'sheet closed');
+  // Add a worker or a job through the screen, the way a person does.
+  const addRec = async (name, extra) => { await click('[data-action="rec-add"]'); await type('#rec-name', name);
+    if(extra) await type('#rec-extra', extra); await click('[data-action="rec-save"]'); await closed('saved ' + name); };
+  const openRec = async name => { await ev('(function(n){var b=Array.prototype.filter.call(document.querySelectorAll("[data-action=rec-edit]"),function(e){return e.querySelector(".rec-name").textContent===n})[0];if(!b)throw new Error("no row "+n);b.click();return true})(' + q(name) + ')');
+    await until('!!document.getElementById("rec-name")', 3000, 'record sheet for ' + name); };
+  const names = sel => ev('JSON.stringify(Array.prototype.map.call(document.querySelectorAll(' + q(sel + ' .rec-name') + '),function(e){return e.textContent}))').then(JSON.parse);
+  const stored = async key => JSON.parse(await raw('notebuiltpro.' + key));
+  const newIds = n => ev('JSON.stringify(Array.from({length:' + n + '},function(){return EGSCrew.newId()}))').then(JSON.parse);
+  const rec = (id, name, extraKey, extra, at, archived) => { const r = { id, name }; r[extraKey] = extra || ''; r.archived = !!archived; r.createdAt = at; r.updatedAt = at; return r; };
+  const NOW = Math.floor(Date.now() / 1000);
+
   await size(320, 568); await scheme('dark');
 
   // ---- cold open ---------------------------------------------------------------
@@ -183,7 +199,7 @@ async function run(){
   // The stronger level needs the other two names; they are passed in once the app knows them.
   { let s = 0x9e3779b9; const r32 = () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
     const pick = () => Array.from({ length:40 }, () => String.fromCodePoint(0x20000 + Math.floor(r32() * 42719))).join('');
-    const r = await ev('nameCheck(' + q(pick()) + ',{job:' + q(pick()) + ',worker:' + q(pick()) + '}).then(function(r){return r.level+"|"+r.msg})');
+    const r = await ev('nameCheck(' + q(pick()) + ',"boss",null,{job:' + q(pick()) + ',worker:' + q(pick()) + '}).then(function(r){return r.level+"|"+r.msg})');
     ok(/^none\|.*no room/.test(r), 'three unrelated 40-character names in rare CJK characters measure as no room at all', r); }
   await type('#boss-name', 'M' + 'i'.repeat(40));
   await until('document.getElementById("name-msg").className.indexOf("bad")>=0', 5000, '41 characters refused');
@@ -203,7 +219,7 @@ async function run(){
   const S1 = await raw('notebuiltpro.settings'), s1 = JSON.parse(S1);
   ok(ID_RE.test(s1.boss.id), 'first run minted a permanent ID', S1);
   ok(s1.boss.name === 'Mike', 'and took the name, trimmed', s1.boss.name);
-  ok(s1.schemaVersion === 1 && Object.keys(s1).join() === 'schemaVersion,boss' && Object.keys(s1.boss).join() === 'id,name', 'the save stamped schema 1, in a fixed key order', S1);
+  ok(s1.schemaVersion === 2 && Object.keys(s1).join() === 'schemaVersion,boss' && Object.keys(s1.boss).join() === 'id,name', 'the save stamped schema 2, in a fixed key order', S1);
   ok((await text('.ver-stamp')) === VERSION && /Mike/.test(await text('#app')), 'Home shows the name and the stamp');
   ok((await ev('location.hash')) === '#/home' && (await ev('history.state.d')) === 1, 'history is seeded: guard, then Home');
   ok(!(await overflow()), 'Home: no horizontal scroll at 320px', await overflow());
@@ -232,11 +248,22 @@ async function run(){
   await click('[data-action="edit-name"]'); await type('#edit-name', 'Mike S'); await click('[data-action="name-save"]');
   await until('localStorage.getItem("notebuiltpro.settings").indexOf("Mike S")>0', 5000, 'rename saved');
   const S2 = JSON.parse(await raw('notebuiltpro.settings'));
-  ok(S2.schemaVersion === 1, 'the first ordinary save stamps it');
+  ok(S2.schemaVersion === 2, 'the first ordinary save stamps it');
   ok(S2.boss.id === s1.boss.id && S2.boss.name === 'Mike S', 'renaming keeps the ID', JSON.stringify(S2));
   ok((await raw('notebuiltpro.settings__bak')) === UNSTAMPED, 'the save backed up what was there first');
   ok((await raw('notebuiltpro.selfcheck.marker')) === null, 'the harness key is dropped by that save');
   ok(await ev('!document.getElementById("sheet-root").innerHTML') && (await text('#set-name')) === 'Mike S', 'the sheet closed and Settings shows the new name');
+
+  // A phone still on the stage 1 shape: schema 1, no crew, no jobs.
+  const V1 = JSON.stringify({ schemaVersion:1, boss:s1.boss });
+  await seed([['notebuiltpro.settings', V1]]);
+  await load('#/home'); await sleep(500);
+  ok((await snap()) === JSON.stringify([['notebuiltpro.settings', V1]]) && /Mike/.test(await text('#app')), 'a phone on schema 1 opens as it was, and startup does not move it to schema 2');
+  await click('[data-go="crew"]'); await addRec('Joe');
+  { const st = JSON.parse(await raw('notebuiltpro.settings')), ro = await stored('roster');
+    ok(ro.length === 1 && st.schemaVersion === 2 && st.boss.id === s1.boss.id, 'adding the first worker writes the crew and, with it, stamps schema 2', JSON.stringify(st));
+    ok((await raw('notebuiltpro.settings__bak')) === V1, 'and the schema 1 settings are kept as the backup copy'); }
+  await seed([['notebuiltpro.settings', JSON.stringify(S2)]]); await load('#/settings'); await sleep(200);
 
   // ---- rename with a long name ---------------------------------------------------
   section('Settings: your name');
@@ -297,6 +324,137 @@ async function run(){
   ok((await text('.ver-stamp')) === VERSION && (await snap()) === JSON.stringify([['notebuiltpro.settings', FUTURE]]), 'the gate carries the stamp and the data is untouched');
   ok(!(await overflow()), 'newer-version gate: no horizontal scroll', await overflow());
 
+  // ---- crew ---------------------------------------------------------------------------
+  section('Crew');
+  await setup('Mike');
+  ok(/Nobody yet/.test(await text('#home-crew')) && /No jobs yet/.test(await text('#home-jobs')), 'Home says there is no crew and no jobs yet');
+  await click('[data-go="crew"]');
+  ok((await ev('location.hash')) === '#/crew' && /Nobody yet/.test(await text('#app')) && (await raw('notebuiltpro.roster')) === null, 'Crew opens empty, and opening it writes nothing');
+  await addRec('joe', 'Framer'); await addRec('Zed'); await addRec('Joe', '555-0100'); await addRec('amy');
+  let ro = await stored('roster');
+  ok(ro.length === 4 && ro.every(w => ID_RE.test(w.id)) && new Set(ro.map(w => w.id)).size === 4, 'each worker gets a permanent ID when added', JSON.stringify(ro.map(w => w.id)));
+  ok(ro.every(w => Object.keys(w).join() === 'id,name,note,archived,createdAt,updatedAt' && w.archived === false && w.createdAt === w.updatedAt && Math.abs(w.createdAt - NOW) < 600), 'a worker is stored as id, name, note, archived and two times, in that order');
+  ok(ro.map(w => w.name).join() === 'joe,Zed,Joe,amy' && ro[0].note === 'Framer' && ro[1].note === '', 'stored in the order they were added, with the note');
+  { const shown = await names('#rec-list'), want = ro.slice().sort((a, b) => a.name.toLowerCase() < b.name.toLowerCase() ? -1 : a.name.toLowerCase() > b.name.toLowerCase() ? 1 : (a.id < b.id ? -1 : 1)).map(w => w.name);
+    ok(shown.join() === want.join() && shown[0] === 'amy' && shown[3] === 'Zed', 'shown sorted by name, ties broken by ID, never in stored order', shown.join() + ' vs ' + want.join()); }
+  ok(/555-0100/.test(await text('#rec-list')) && /Framer/.test(await text('#rec-list')), 'the note shows under the name');
+  await reload(); await sleep(200);
+  ok((await ev('location.hash')) === '#/crew' && (await names('#rec-list')).length === 4, 'the crew survives a reload');
+
+  // Edit: the ID and the created time never move.
+  await openRec('Zed'); await type('#rec-name', 'Zed R'); await type('#rec-extra', 'Electrician'); await click('[data-action="rec-save"]'); await closed();
+  { const z0 = ro[1], z = (await stored('roster'))[1];
+    ok(z.id === z0.id && z.createdAt === z0.createdAt && z.name === 'Zed R' && z.note === 'Electrician' && z.updatedAt >= z0.updatedAt, 'editing a worker keeps their ID and position, and changes only what was edited', JSON.stringify(z)); }
+  { const b4 = await snap(); await openRec('amy'); await click('[data-action="rec-save"]'); await closed();
+    ok((await snap()) === b4, 'saving with nothing changed writes nothing'); }
+
+  // The name check, in the worker's own slot.
+  await click('[data-action="rec-add"]'); await type('#rec-name', HAN);
+  await until('document.getElementById("rec-name-msg").className.indexOf("warn")>=0', 5000, 'worker name warning');
+  ok(/takes up a lot of a link|no room/.test(await text('#rec-name-msg')), 'a 40-character worker name warns while typing', await text('#rec-name-msg'));
+  console.log('       "' + (await text('#rec-name-msg')) + '"');
+  ok(!(await overflow()), 'worker sheet with a warning: no horizontal scroll at 320px', await overflow());
+  await shot('06-worker-sheet-warning-320');
+  await click('[data-action="rec-save"]'); await closed('warned worker saved');
+  ok((await stored('roster')).length === 5 && (await stored('roster'))[4].name === HAN, 'and the warning does not stop the save');
+  { const b4 = await snap();
+    for(const [bad, why] of [['', /Type a name/], ['x'.repeat(41), /40 characters/], ['Joe <b>', /markup/]]){
+      await click('[data-action="rec-add"]'); await type('#rec-name', bad); await click('[data-action="rec-save"]');
+      await until(why.toString() + '.test(document.getElementById("rec-name-msg").textContent)', 4000, 'refusal ' + why);
+      await click('.scrim .help-corner'); await sleep(50); await ev('history.back()'); await closed(); }
+    await click('[data-action="rec-add"]'); await type('#rec-name', 'Sam'); await type('#rec-extra', 'n'.repeat(121)); await click('[data-action="rec-save"]');
+    await until('/120 characters/.test(document.getElementById("rec-extra-msg").textContent)', 4000, 'long note refused');
+    await ev('history.back()'); await closed();
+    ok((await snap()) === b4 && (await ev('location.hash')) === '#/crew', 'an empty name, 41 characters, markup and a 121-character note are each refused, and nothing is written'); }
+
+  // Archive asks first, deletes nothing, and can be undone.
+  await openRec('joe'); dialogs.seen.length = 0; dialogs.answer = false;
+  await click('[data-action="rec-archive"]'); await sleep(200);
+  ok(dialogs.seen.length === 1 && /Archive joe\?/.test(dialogs.seen[0]) && /Nothing is deleted/.test(dialogs.seen[0]), 'archiving asks first', dialogs.seen.join('|'));
+  ok((await stored('roster'))[0].archived === false && await ev('!!document.getElementById("rec-name")'), 'declining changes nothing');
+  dialogs.answer = true; await click('[data-action="rec-archive"]'); await closed('archived');
+  ro = await stored('roster');
+  ok(ro.length === 5 && ro[0].archived === true && ro[0].id && (await names('#rec-list')).indexOf('joe') < 0 && (await names('#rec-archived')).join() === 'joe', 'accepting moves them to Archived; the record and its ID stay');
+  await click('[data-back]'); await until('location.hash==="#/home"', 4000, 'home');
+  ok((await text('#home-crew')) === '4 people', 'Home counts the crew still in use', await text('#home-crew'));
+  await click('[data-go="crew"]'); await openRec('joe'); dialogs.seen.length = 0;
+  await click('[data-action="rec-unarchive"]'); await closed('brought back');
+  ok(dialogs.seen.length === 0 && (await stored('roster'))[0].archived === false && (await names('#rec-list')).indexOf('joe') >= 0 && await ev('!document.getElementById("rec-archived")'), 'Bring back restores them without asking');
+
+  // Escaping, and back.
+  await addRec('&lt;i&gt; O\'Neil & "Co"', '&amp; <b>bold</b> "note"');
+  ok((await names('#rec-list')).indexOf('&lt;i&gt; O\'Neil & "Co"') >= 0 && await ev('!document.querySelector("#rec-list b, #rec-list i")') && /&amp; <b>bold<\/b> "note"/.test(await text('#rec-list')), 'a worker\u2019s name and note are escaped where they are drawn');
+  await openRec('&lt;i&gt; O\'Neil & "Co"');
+  ok((await ev('document.getElementById("rec-name").value')) === '&lt;i&gt; O\'Neil & "Co"' && (await ev('document.getElementById("rec-extra").value')) === '&amp; <b>bold</b> "note"', 'and both round-trip through the edit fields intact');
+  ok((await ev('history.state.o')) === 'sheet', 'the worker sheet owns a history entry');
+  await ev('history.back()'); await closed('sheet closed by back');
+  ok((await ev('location.hash')) === '#/crew', 'back closes the sheet and stays on Crew');
+  await ev('history.back()'); await until('location.hash==="#/home"', 4000, 'back to home');
+  ok(true, 'and back again returns to Home');
+  await load('#/crew'); await sleep(150); await ev('history.back()'); await until('location.hash==="#/home"', 4000, 'seeded crew parent');
+  ok(true, 'a cold open on Crew is seeded with Home beneath it');
+
+  // ---- jobs ---------------------------------------------------------------------------
+  section('Jobs');
+  await click('[data-go="jobs"]');
+  ok((await ev('location.hash')) === '#/jobs' && /No jobs yet/.test(await text('#app')) && (await raw('notebuiltpro.jobs')) === null, 'Jobs opens empty, and opening it writes nothing');
+  await addRec('Oak St reno', '12 Oak St'); await addRec('alder duplex');
+  let jb = await stored('jobs');
+  ok(jb.length === 2 && jb.every(j => ID_RE.test(j.id) && Object.keys(j).join() === 'id,name,address,archived,createdAt,updatedAt') && jb[0].address === '12 Oak St', 'a job is stored as id, name, address, archived and two times, with a permanent ID', JSON.stringify(jb));
+  ok((await names('#rec-list')).join() === 'alder duplex,Oak St reno' && /12 Oak St/.test(await text('#rec-list')), 'jobs are shown sorted by name, with the address');
+  ok(await ev('!/mode|private|crew link/i.test(document.getElementById("app").textContent)'), 'a job has no send-mode setting');
+  await openRec('Oak St reno'); await type('#rec-name', 'Oak Street reno'); await click('[data-action="rec-save"]'); await closed();
+  ok((await stored('jobs'))[0].id === jb[0].id && (await stored('jobs'))[0].name === 'Oak Street reno', 'renaming a job keeps its ID');
+  // A different long name from the worker's: two identical names really do compress into less room.
+  const HAN2 = '北京市朝阳区望京街道花家地南里小区旧楼翻新改造及外墙保温屋面防水厨卫水电更换项目二期工程'.slice(0, 40);
+  await click('[data-action="rec-add"]'); await type('#rec-name', HAN2);
+  await until('document.getElementById("rec-name-msg").className.indexOf("warn")>=0', 5000, 'job name warning');
+  ok(/Beside the longest names you already have/.test(await text('#rec-name-msg')), 'a long job name warns while typing, weighed against the real names on the phone', await text('#rec-name-msg'));
+  await type('#rec-extra', 'a'.repeat(161)); await click('[data-action="rec-save"]');
+  await until('/160 characters/.test(document.getElementById("rec-extra-msg").textContent)', 4000, 'long address refused');
+  await type('#rec-extra', 'Unit 4'); await click('[data-action="rec-save"]'); await closed('warned job saved');
+  ok((await stored('jobs')).length === 3, 'the warning does not stop the save, and a 161-character address was refused first');
+  await openRec('alder duplex'); dialogs.seen.length = 0; dialogs.answer = true;
+  await click('[data-action="rec-archive"]'); await closed('job archived');
+  ok(dialogs.seen.length === 1 && /Archive alder duplex\?/.test(dialogs.seen[0]) && (await stored('jobs'))[1].archived === true && (await names('#rec-archived')).join() === 'alder duplex', 'archiving a job asks first and deletes nothing');
+  await click('[data-back]'); await until('location.hash==="#/home"', 4000, 'home');
+  ok((await text('#home-jobs')) === '2 jobs' && (await text('#home-crew')) === '6 people', 'Home counts both', (await text('#home-jobs')) + ' / ' + (await text('#home-crew')));
+  ok(!(await overflow()), 'Home with crew and jobs: no horizontal scroll at 320px', await overflow());
+  await shot('07-home-stage2-320');
+  ok(JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 2 && JSON.parse(await snap()).every(p => p[0].indexOf('notebuiltpro.') === 0), 'every key is still notebuiltpro.*');
+
+  // A boss rename is now weighed against the real crew and jobs.
+  await click('[data-go="settings"]'); await click('[data-action="edit-name"]'); await type('#edit-name', CYR);
+  await until('/Beside the longest names you already have/.test(document.getElementById("edit-name-msg").textContent)', 5000, 'boss rename weighed against real names');
+  ok(true, 'the boss\u2019s own name is weighed against the real crew and jobs once they exist');
+  await ev('history.back()'); await closed();
+
+  // ---- stores this phone cannot read -----------------------------------------------------
+  section('Damaged crew or jobs');
+  const GOODSET = await raw('notebuiltpro.settings'), GOODJOBS = await raw('notebuiltpro.jobs');
+  const BADROSTER = JSON.stringify([{ id:JSON.parse(GOODSET).boss.id, name:'<img src=x onerror="window.__z=1">', note:'', archived:false, createdAt:1, updatedAt:1 }]);
+  await seed([['notebuiltpro.settings', GOODSET], ['notebuiltpro.jobs', GOODJOBS], ['notebuiltpro.roster', BADROSTER], ['notebuiltpro.installPromptDismissed', '1']]);
+  await load('#/crew'); await sleep(300);
+  ok(/can\u2019t read the crew/.test(await text('#app')) && await ev('!window.__z && !document.querySelector("#app img") && !document.querySelector("[data-action=rec-add]")'), 'a stored worker that fails the check is never drawn: Crew says it cannot read the crew');
+  ok((await raw('notebuiltpro.roster')) === BADROSTER, 'and leaves it untouched');
+  { const had0 = fs.readdirSync(work); await click('[data-go="support"]'); await click('[data-action="export"]'); await sleep(700);
+    ok(fs.readdirSync(work).length === had0.length && /didn\u2019t make a backup/.test(await text('#toast')), 'export refuses rather than write a backup with the crew missing', await text('#toast')); }
+  await ev('history.back()'); await until('location.hash==="#/crew"', 4000, 'crew');
+  dialogs.seen.length = 0; dialogs.answer = false; await click('[data-action="store-fresh"]'); await sleep(150);
+  ok(dialogs.seen.length === 1 && await ev('!!document.querySelector("[data-action=store-fresh]")'), 'Start again asks first, and declining changes nothing');
+  dialogs.answer = true; await click('[data-action="store-fresh"]'); await until('!!document.querySelector("[data-action=rec-add]")', 3000, 'fresh crew');
+  ok((await raw('notebuiltpro.roster')) === BADROSTER, 'accepting writes nothing until someone is added');
+  await addRec('Sam');
+  ok((await stored('roster')).length === 1 && (await raw('notebuiltpro.roster__bak')) === BADROSTER, 'then the new crew is saved and the unreadable original is kept as the backup copy');
+  // A damaged main copy with a good backup copy heals.
+  { const good1 = await raw('notebuiltpro.roster');
+    await seed([['notebuiltpro.settings', GOODSET], ['notebuiltpro.roster', '[oops'], ['notebuiltpro.roster__bak', good1]]);
+    await load('#/crew'); await sleep(250);
+    ok((await names('#rec-list')).join() === 'Sam' && (await raw('notebuiltpro.roster')) === '[oops', 'a damaged crew heals from its backup copy, without writing at startup'); }
+  // Nothing is ever deleted, so a save that would shorten a store is refused.
+  { await seed([['notebuiltpro.settings', GOODSET], ['notebuiltpro.jobs', GOODJOBS]]); await load('#/jobs'); await sleep(200);
+    ok((await ev('(function(){var keep=jobs;jobs=jobs.slice(1);var ok=commit("jobs");jobs=keep;return ok})()')) === false && (await raw('notebuiltpro.jobs')) === GOODJOBS, 'a write that would shorten the jobs is refused'); }
+
   // A report link opened before there is a name: nothing to show, and nothing left in the address.
   await wipe(); await load('#report=1AAAAbbbbCCCC'); await sleep(200);
   ok((await ev('location.href')).indexOf('report=') < 0 && await ev('!!document.getElementById("boss-name") && !document.getElementById("sheet-root").innerHTML') && (await snap()) === '[]', 'a report link on a phone with no name yet is stripped, and first run carries on');
@@ -304,7 +462,11 @@ async function run(){
   // ---- export, restore, round trip ----------------------------------------------------
   section('Backup round trip');
   await setup('Mike');
-  const A = await raw('notebuiltpro.settings'), a = JSON.parse(A);
+  await click('[data-go="crew"]'); await addRec('Joe', 'Framer'); await addRec('Maria'); await addRec('Old Tom');
+  await openRec('Old Tom'); dialogs.answer = true; await click('[data-action="rec-archive"]'); await closed();
+  await click('[data-back]'); await until('location.hash==="#/home"', 4000, 'home'); await click('[data-go="jobs"]'); await addRec('Oak St reno', '12 Oak St'); await addRec('Alder duplex');
+  await click('[data-back]'); await until('location.hash==="#/home"', 4000, 'home');
+  const A = await raw('notebuiltpro.settings'), a = JSON.parse(A), AR = await raw('notebuiltpro.roster'), AJ = await raw('notebuiltpro.jobs');
   await click('[data-go="settings"]'); await click('[data-go="support"]');
   ok((await ev('location.hash')) === '#/support' && /No backup has been saved/.test(await text('#last-backup')), 'Support & Backup opens and says no backup yet');
   let had = fs.readdirSync(work);
@@ -313,8 +475,9 @@ async function run(){
   const today = await ev('(function(){var d=new Date(),p=function(n){return String(n).padStart(2,"0")};return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())})()');
   ok(F1 === 'notebuilt-pro-backup-' + today + '.json', 'the file is named notebuilt-pro-backup-<date>.json', F1);
   ok(B1.app === 'notebuilt-pro' && B1.kind === 'backup' && B1.version === 1 && JSON.stringify(B1.settings) === A, 'it carries the settings exactly as stored, ID included');
-  ok(Array.isArray(B1.roster) && Array.isArray(B1.jobs) && JSON.stringify(B1.crew) === '{"lists":[],"reports":[]}', 'and a section for crew, jobs, lists and reports from day one');
-  ok((await raw('notebuiltpro.settings')) === A, 'exporting does not change the data');
+  ok(JSON.stringify(B1.roster) === AR && JSON.stringify(B1.jobs) === AJ && B1.roster.length === 3 && B1.jobs.length === 2, 'the crew and the jobs exactly as stored, the archived worker included');
+  ok(JSON.stringify(B1.crew) === '{"lists":[],"reports":[]}', 'and a section for lists and reports, empty until they exist');
+  ok((await raw('notebuiltpro.settings')) === A && (await raw('notebuiltpro.roster')) === AR && (await raw('notebuiltpro.jobs')) === AJ, 'exporting does not change the data');
   await until('/Last backup from this phone/.test(document.getElementById("last-backup").textContent)', 4000, 'last-backup line updated');
   ok((await raw('notebuiltpro.lastBackupAt')) === B1.exportedAt, 'the export is recorded on this phone, outside the data');
   const stateA = await ev('indexedDB.databases().then(function(d){return JSON.stringify(d.filter(function(x){return x.name==="notebuiltpro"}))})');
@@ -326,6 +489,8 @@ async function run(){
   await until('!!document.querySelector(".topbar")', 8000, 'home after restore');
   ok(dialogs.seen.length === 0, 'restoring onto an empty phone has nothing to replace, so nothing to confirm');
   ok((await raw('notebuiltpro.settings')) === A, 'the restored settings are byte-identical: same ID, not a new one', await raw('notebuiltpro.settings'));
+  ok((await raw('notebuiltpro.roster')) === AR && (await raw('notebuiltpro.jobs')) === AJ, 'the restored crew and jobs are byte-identical: same IDs, same order, same archive flags');
+  ok((await text('#home-crew')) === '2 people' && (await text('#home-jobs')) === '2 jobs', 'and Home counts them straight away');
   ok((await raw('notebuiltpro.lastBackupAt')) === B1.exportedAt, 'the phone remembers the file it was restored from');
   ok((await ev('indexedDB.databases().then(function(d){return JSON.stringify(d.filter(function(x){return x.name==="notebuiltpro"}))})')) === stateA, 'the crew database is back at the same version');
   await click('[data-go="settings"]'); await click('[data-go="support"]');
@@ -342,12 +507,22 @@ async function run(){
   await click('[data-go="settings"]'); await click('[data-go="support"]');
   dialogs.seen.length = 0; dialogs.answer = false;
   await pickFile('.wrap input[data-import]', path.join(work, 'first.json')); await sleep(400);
-  ok(dialogs.seen.length === 1 && /REPLACES/.test(dialogs.seen[0]) && /Mike/.test(dialogs.seen[0]) && /different/.test(dialogs.seen[0]), 'restoring over a name and ID asks first, and says the ID differs', dialogs.seen.join('|'));
+  ok(dialogs.seen.length === 1 && /REPLACES/.test(dialogs.seen[0]) && /Mike, 2 on the crew, 2 jobs/.test(dialogs.seen[0]) && /different/.test(dialogs.seen[0]), 'restoring over a name and ID asks first, says what the file holds, and says the ID differs', dialogs.seen.join('|'));
   ok((await raw('notebuiltpro.settings')) === D, 'declining leaves everything as it was');
   dialogs.answer = true;
   await pickFile('.wrap input[data-import]', path.join(work, 'first.json'));
   await until('localStorage.getItem("notebuiltpro.settings")===' + q(A), 6000, 'restore applied');
-  ok((await raw('notebuiltpro.settings__bak')) === D && (await ev('location.hash')) === '#/home', 'accepting restores the file, keeps the replaced data as the backup copy, and lands on Home');
+  ok((await raw('notebuiltpro.settings__bak')) === D && (await ev('location.hash')) === '#/home' && (await raw('notebuiltpro.roster')) === AR && (await raw('notebuiltpro.jobs')) === AJ, 'accepting restores the file, crew and jobs with it, keeps the replaced settings as the backup copy, and lands on Home');
+  // A stage 1 backup: schema 1, nothing but a name and an ID. It replaces the crew with none, after asking.
+  { const old = JSON.parse(T1); old.settings.schemaVersion = 1; old.roster = []; old.jobs = [];
+    dialogs.seen.length = 0; dialogs.answer = true;
+    await click('[data-go="settings"]'); await click('[data-go="support"]');
+    await pickFile('.wrap input[data-import]', tmpFile('stage1.json', JSON.stringify(old)));
+    await until('localStorage.getItem("notebuiltpro.roster")==="[]"', 6000, 'stage 1 backup restored');
+    ok(/Mike, 0 on the crew, 0 jobs/.test(dialogs.seen[0]) && JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 2 && (await raw('notebuiltpro.roster__bak')) === AR, 'a stage 1 backup restores, says it holds no crew, comes up to schema 2, and the replaced crew is kept as the backup copy');
+    await click('[data-go="settings"]'); await click('[data-go="support"]');
+    await pickFile('.wrap input[data-import]', path.join(work, 'first.json'));
+    await until('localStorage.getItem("notebuiltpro.roster")===' + q(AR), 6000, 'full backup restored again'); }
 
   // ---- hostile backup files ---------------------------------------------------------
   section('Hostile backup files');
@@ -363,8 +538,27 @@ async function run(){
     ['markup in the name', (() => { const g = good(); g.settings.boss.name = '<img src=x onerror="window.__y=1">'; return JSON.stringify(g); })()],
     ['a 41-character name', (() => { const g = good(); g.settings.boss.name = 'x'.repeat(41); return JSON.stringify(g); })()],
     ['no boss at all', (() => { const g = good(); delete g.settings.boss; return JSON.stringify(g); })()],
-    ['an unchecked roster', (() => { const g = good(); g.roster = [{ id:a.boss.id, name:'<script>1</script>' }]; return JSON.stringify(g); })()],
+    ['a worker with a malformed ID', (() => { const g = good(); g.roster[0].id = 'short'; return JSON.stringify(g); })()],
+    ['two workers with one ID', (() => { const g = good(); g.roster[1].id = g.roster[0].id; return JSON.stringify(g); })()],
+    ['markup in a worker\u2019s name', (() => { const g = good(); g.roster[0].name = '<script>window.__y=1</script>'; return JSON.stringify(g); })()],
+    ['a 41-character worker name', (() => { const g = good(); g.roster[0].name = 'x'.repeat(41); return JSON.stringify(g); })()],
+    ['a worker with no name', (() => { const g = good(); delete g.roster[0].name; return JSON.stringify(g); })()],
+    ['a 121-character note', (() => { const g = good(); g.roster[0].note = 'n'.repeat(121); return JSON.stringify(g); })()],
+    ['a line break in a note', (() => { const g = good(); g.roster[0].note = 'a\nb'; return JSON.stringify(g); })()],
+    ['a note that is not text', (() => { const g = good(); g.roster[0].note = { a:1 }; return JSON.stringify(g); })()],
+    ['an archive flag that is not true or false', (() => { const g = good(); g.roster[0].archived = 'yes'; return JSON.stringify(g); })()],
+    ['a negative time', (() => { const g = good(); g.roster[0].createdAt = -1; return JSON.stringify(g); })()],
+    ['a time that is not a number', (() => { const g = good(); g.roster[0].updatedAt = '1790000000'; return JSON.stringify(g); })()],
+    ['a worker that is not a record', (() => { const g = good(); g.roster[0] = 'Joe'; return JSON.stringify(g); })()],
+    ['a roster that is not a list', (() => { const g = good(); g.roster = { 0:g.roster[0] }; return JSON.stringify(g); })()],
+    ['1,001 workers, each one valid', (() => { const g = good(); const w = g.roster[0]; g.roster = Array.from({ length:1001 }, () => Object.assign({}, w, { id:require('crypto').randomBytes(16).toString('base64url') })); return JSON.stringify(g); })()],
+    ['a job with a malformed ID', (() => { const g = good(); g.jobs[0].id = 'B'.repeat(22);   /* right length, but not a canonical ID: the last character can only be A, Q, g or w */ return JSON.stringify(g); })()],
+    ['two jobs with one ID', (() => { const g = good(); g.jobs[1].id = g.jobs[0].id; return JSON.stringify(g); })()],
+    ['markup in a job name', (() => { const g = good(); g.jobs[0].name = 'Oak <img src=x onerror="window.__y=1">'; return JSON.stringify(g); })()],
+    ['a 161-character address', (() => { const g = good(); g.jobs[0].address = 'a'.repeat(161); return JSON.stringify(g); })()],
+    ['a control character in an address', (() => { const g = good(); g.jobs[0].address = 'a\u0007b'; return JSON.stringify(g); })()],
     ['an unchecked crew list', (() => { const g = good(); g.crew.lists = [{ listId:a.boss.id, evil:true }]; return JSON.stringify(g); })()],
+    ['an unchecked report', (() => { const g = good(); g.crew.reports = [{ listId:a.boss.id, workerId:a.boss.id }]; return JSON.stringify(g); })()],
     ['a crew section of the wrong shape', (() => { const g = good(); g.crew = { lists:'x' }; return JSON.stringify(g); })()],
     ['a file over the size cap', JSON.stringify(Object.assign(good(), { pad:'x'.repeat(5300000) }))]
   ];
@@ -378,11 +572,11 @@ async function run(){
     await click('[data-action="sheet-close"]'); await until('!document.getElementById("sheet-root").innerHTML', 3000, 'refusal sheet closed');
   }
   // A backup with no crew section is valid and leaves crew data alone (rule 8).
-  { const g = good(); delete g.crew; g.junk = { a:1 }; g.settings.junk = 'dropped';
+  { const g = good(); delete g.crew; g.junk = { a:1 }; g.settings.junk = 'dropped'; g.roster[0].junk = '<b>'; g.jobs[0].phone = 'x'; delete g.jobs[1].address;
     dialogs.answer = true;
     await pickFile('.wrap input[data-import]', tmpFile('nocrew.json', JSON.stringify(g)));
     await until('location.hash==="#/home"', 6000, 'restore without a crew section');
-    ok((await raw('notebuiltpro.settings')) === A, 'a backup with no crew section restores, and unknown keys are dropped'); }
+    ok((await raw('notebuiltpro.settings')) === A && (await raw('notebuiltpro.roster')) === AR && (await raw('notebuiltpro.jobs')) === AJ, 'a backup with no lists section restores; unknown keys are dropped and a missing address reads as none'); }
 
   // ---- back resolver -------------------------------------------------------------------
   section('Back and the hash');
@@ -445,32 +639,66 @@ async function run(){
   ok((await ev('document.querySelectorAll("#banners .banner").length')) === 0, 'then nothing: a name and an ID alone are not data worth a backup nudge', await text('#banners'));
   await reload(); await sleep(400);
   ok((await ev('document.querySelectorAll("#banners .banner").length')) === 0 && (await raw('notebuiltpro.lastBackupAt')) === null, 'and still nothing after a reload, with no backup ever made');
-  // The nudge is held, not removed: it appears once there is crew or a job to lose.
-  { const keep = await raw('notebuiltpro.settings');
-    for(const key of ['notebuiltpro.roster', 'notebuiltpro.jobs']){
-      await seed([['notebuiltpro.settings', keep], ['notebuiltpro.installPromptDismissed', '1'], [key, '[{"id":"x"}]']]);
-      await load('#/home'); await sleep(400);
-      ok((await ev('document.querySelectorAll("#banners .banner").length')) === 1 && /No backup yet/.test(await text('#banners')), 'with ' + key.split('.')[1] + ' on the phone and no backup, the nudge appears');
-    }
-    await seed([['notebuiltpro.settings', keep], ['notebuiltpro.installPromptDismissed', '1'], ['notebuiltpro.jobs', '[{"id":"x"}]'], ['notebuiltpro.lastBackupAt', new Date(Date.now() - 22 * 86400000).toISOString()]]);
-    await load('#/home'); await sleep(400);
-    ok(/Time for a fresh backup/.test(await text('#banners')), 'and again when the last backup is 22 days old');
-    await seed([['notebuiltpro.settings', keep], ['notebuiltpro.installPromptDismissed', '1'], ['notebuiltpro.jobs', '[{"id":"x"}]'], ['notebuiltpro.lastBackupAt', new Date(Date.now() - 20 * 86400000).toISOString()]]);
-    await load('#/home'); await sleep(400);
-    ok((await ev('persistedOk=true,backupNudgeWanted()')) === false && (await ev('persistedOk=false,backupNudgeWanted()')) === true, 'but not for a backup 20 days old, unless the browser has refused to keep the storage');
-    await seed([['notebuiltpro.settings', keep], ['notebuiltpro.installPromptDismissed', '1'], ['notebuiltpro.jobs', '[{"id":"x"}]']]);
-    await load('#/home'); await sleep(400); }
-  ok(/No backup yet/.test(await text('#banners')) && !(await overflow()), 'banner: no horizontal scroll at 320px', await overflow());
+  // Real data, and then one of two reasons. The browser's answer about keeping
+  // storage is forced each way, so the result does not depend on headless Chrome's.
+  { const keep = await raw('notebuiltpro.settings'), ids = await newIds(2), DAY = 86400;
+    const banner = async persisted => { await sleep(350); await ev('persistedOk=' + persisted + ',renderBanners(),true'); return (await text('#banners')) || ''; };
+    const put = async (extra) => { await seed([['notebuiltpro.settings', keep], ['notebuiltpro.installPromptDismissed', '1']].concat(extra)); await load('#/home'); };
+    const worker = age => ['notebuiltpro.roster', JSON.stringify([rec(ids[0], 'Joe', 'note', '', NOW - age * DAY)])];
+    const job = age => ['notebuiltpro.jobs', JSON.stringify([rec(ids[1], 'Oak St', 'address', '', NOW - age * DAY)])];
+    const backup = age => ['notebuiltpro.lastBackupAt', new Date(Date.now() - age * DAY * 1000).toISOString()];
+    await put([worker(0)]);
+    ok((await banner(true)) === '', 'a worker added today, storage kept: no nudge. New data is not overdue');
+    ok(/This browser may clear the app/.test(await banner(false)), 'the same worker, storage not kept: the nudge appears and says why');
+    await put([worker(20)]);
+    ok((await banner(true)) === '', 'no backup ever, oldest data 20 days old: not yet');
+    await put([job(22)]);
+    ok(/No backup yet/.test(await banner(true)), 'no backup ever, oldest data 22 days old: overdue, for a job as much as a worker');
+    await put([worker(400), backup(20)]);
+    ok((await banner(true)) === '', 'a backup 20 days ago: not yet, however old the data');
+    await put([worker(400), backup(22)]);
+    ok(/Time for a fresh backup/.test(await banner(true)), 'a backup 22 days ago: overdue');
+    await put([backup(400)]);
+    ok((await banner(false)) === '', 'no crew and no jobs: never, whatever else is true');
+    await put([worker(22)]); await banner(true); }
+  ok((await ev('document.querySelectorAll("#banners .banner").length')) === 1 && !(await overflow()), 'one banner, and no horizontal scroll at 320px', await overflow());
   await shot('05-home-nudge-320');
   await click('[data-action="nudge-snooze"]');
   { const until7 = +(await raw('notebuiltpro.backupNudgeSnoozeUntil')) - Date.now();
-    ok(until7 > 6.9 * 86400000 && until7 <= 7 * 86400000 && (await ev('document.querySelectorAll("#banners .banner").length')) === 0, 'Later snoozes it seven days'); }
+    ok(until7 > 6.9 * 86400000 && until7 <= 7 * 86400000 && (await ev('document.querySelectorAll("#banners .banner").length')) === 0, 'Later snoozes it seven days');
+    ok((await ev('persistedOk=false,backupNudgeWanted()')) === false, 'and the snooze holds even when storage is not kept'); }
+  // The banner's own button makes the backup, and that clears it.
+  { await ev('localStorage.removeItem("notebuiltpro.backupNudgeSnoozeUntil"),persistedOk=true,renderBanners(),true');
+    const had1 = fs.readdirSync(work); await click('#banners [data-action="export"]'); const f = await download(had1);
+    await sleep(200); await ev('persistedOk=true,renderBanners(),true');
+    ok((await text('#banners')) === '' && JSON.parse(fs.readFileSync(path.join(work, f), 'utf8')).roster.length === 1, 'Back up now saves the file, and the nudge goes');
+    fs.renameSync(path.join(work, f), path.join(work, 'nudge.json')); }
   ok(JSON.parse(await snap()).every(p => p[0].indexOf('notebuiltpro.') === 0), 'every key on the phone is notebuiltpro.*', await snap());
+
+  // ---- IndexedDB layout ------------------------------------------------------------------------------
+  section('IndexedDB');
+  const layout = () => ev(`new Promise(function(res){var r=indexedDB.open('notebuiltpro');r.onsuccess=function(){var d=r.result,o={v:d.version,stores:Array.prototype.slice.call(d.objectStoreNames)};
+    var tx=d.transaction(o.stores,'readonly');o.lists=tx.objectStore('lists').keyPath;o.reports=tx.objectStore('reports').keyPath;var c=tx.objectStore('reports').count();c.onsuccess=function(){o.n=c.result;d.close();res(JSON.stringify(o))}}})`);
+  ok((await layout()) === '{"v":2,"stores":["lists","reports"],"lists":"listId","reports":["listId","workerId"],"n":0}', 'lists are keyed by listId; reports by listId and workerId together, one record per worker per list', await layout());
+  const oldDb = withRecord => ev(`new Promise(function(res,rej){var r=indexedDB.open('notebuiltpro',1);r.onupgradeneeded=function(){r.result.createObjectStore('lists',{keyPath:'listId'});var s=r.result.createObjectStore('reports',{keyPath:'listId'});${withRecord ? "s.put({listId:'L1',kept:true});" : ''}};r.onsuccess=function(){r.result.close();res(true)};r.onerror=function(){rej(r.error)}})`);
+  await setup('Mike'); await click('[data-go="settings"]'); await click('[data-go="support"]');
+  await oldDb(false);
+  { const had2 = fs.readdirSync(work); await click('[data-action="export"]'); const f = await download(had2); fs.renameSync(path.join(work, f), path.join(work, 'upgraded.json'));
+    ok(/"reports":\["listId","workerId"\],"n":0/.test(await layout()) && /"v":2/.test(await layout()), 'a stage 1 database, with its empty reports store, is re-keyed on first use', await layout()); }
+  await setup('Mike'); await click('[data-go="settings"]'); await click('[data-go="support"]');
+  await oldDb(true);
+  { const had3 = fs.readdirSync(work); await click('[data-action="export"]'); await sleep(900);
+    const kept = await ev(`new Promise(function(res){var r=indexedDB.open('notebuiltpro');r.onsuccess=function(){var d=r.result,g=d.transaction('reports').objectStore('reports').get('L1');g.onsuccess=function(){var o={v:d.version,rec:g.result};d.close();res(JSON.stringify(o))}}})`);
+    ok(fs.readdirSync(work).length === had3.length && kept === '{"v":1,"rec":{"listId":"L1","kept":true}}', 'if that old store somehow holds a record, the upgrade stops: nothing is dropped and no backup is written without it', kept + ' ' + await text('#toast')); }
 
   // ---- 320px, both themes, every screen ----------------------------------------------------------
   section('320px, dark and light');
-  await seed([['notebuiltpro.settings', JSON.stringify({ schemaVersion:1, boss:{ id:a.boss.id, name:'W'.repeat(40) } })]]);
-  const screens = [['home', '#/home'], ['settings', '#/settings'], ['support', '#/support'], ['privacy', '#/privacy']];
+  const wide = await newIds(4);
+  const WIDE = [['notebuiltpro.settings', JSON.stringify({ schemaVersion:2, boss:{ id:a.boss.id, name:'W'.repeat(40) } })],
+    ['notebuiltpro.roster', JSON.stringify([rec(wide[0], 'W'.repeat(40), 'note', 'M'.repeat(120), NOW), rec(wide[1], 'Wolfeschlegelsteinhausenbergerdorff Sr', 'note', '+1 (555) 010-0100 · finishing carpenter', NOW, true)])],
+    ['notebuiltpro.jobs', JSON.stringify([rec(wide[2], 'W'.repeat(40), 'address', 'M'.repeat(160), NOW), rec(wide[3], 'Oak St', 'address', '', NOW, true)])]];
+  await seed(WIDE);
+  const screens = [['home', '#/home'], ['crew', '#/crew'], ['jobs', '#/jobs'], ['settings', '#/settings'], ['support', '#/support'], ['privacy', '#/privacy']];
   for(const mode of ['dark', 'light']){
     await scheme(mode);
     for(const [name, hash] of screens){
@@ -482,6 +710,12 @@ async function run(){
         for(const tab of ['btc', 'card', 'paypal', 'wise', 'interac']){ await click('[data-pay-tab="' + tab + '"]'); const o2 = await overflow(); if(o2) ok(false, 'support tab ' + tab + ', ' + mode + ': no horizontal scroll', o2); }
         ok(await ev('document.querySelector("[data-pay-tab=interac]").classList.contains("primary") && /egspay/.test(document.getElementById("pay-detail").textContent)'), 'payment tabs switch in place, ' + mode);
       }
+      if(name === 'crew' || name === 'jobs'){
+        ok((await ev('document.querySelectorAll("#rec-list button").length')) === 1 && (await ev('document.querySelectorAll("#rec-archived button").length')) === 1, name + ', ' + mode + ': one in use, one archived');
+        await click('#rec-list [data-action="rec-edit"]'); await sleep(250); const o5 = await overflow(); ok(!o5, name + ' edit sheet, ' + mode + ': no horizontal scroll', o5);
+        await shot('10-' + name + '-sheet-' + mode + '-320'); await ev('history.back()'); await closed();
+        await click('#rec-archived [data-action="rec-edit"]'); await sleep(150); const o6 = await overflow(); ok(!o6 && await ev('!!document.querySelector("[data-action=rec-unarchive]")'), name + ' archived sheet, ' + mode + ': no horizontal scroll', o6);
+        await ev('history.back()'); await closed(); }
       if(name === 'settings'){ await click('[data-action="edit-name"]'); await sleep(200); const o3 = await overflow(); ok(!o3, 'name sheet, ' + mode + ': no horizontal scroll', o3); await click('[data-help="name"]'); await sleep(100); const o4 = await overflow(); ok(!o4, 'help sheet, ' + mode + ': no horizontal scroll', o4); }
       await shot('10-' + name + '-' + mode + '-320');
     }
@@ -505,11 +739,13 @@ async function run(){
   ok(await ev('getComputedStyle(document.querySelector(".help-i")).display==="none"') && (await raw('notebuiltpro.beginner')) === 'off', 'the switch hides every marker, with its own key on this phone');
   await click('[data-action="guide"]');
   let moved = [];
+  await seed(WIDE);
   for(const w of [320, 360, 414, 680]){
     await size(w, 740);
-    for(const [name, hash] of screens.concat([['name sheet', '#/settings']])){
+    for(const [name, hash] of screens.concat([['name sheet', '#/settings'], ['worker sheet', '#/crew'], ['job sheet', '#/jobs']])){
       await load(hash); await sleep(200);
       if(name === 'name sheet'){ await click('[data-action="edit-name"]'); await sleep(150); }
+      if(name === 'worker sheet' || name === 'job sheet'){ await click('#rec-list [data-action="rec-edit"]'); await sleep(200); }
       await ev('guideSet(true),true'); const on = await boxes();
       await ev('guideSet(false),true'); const off = await boxes();
       await ev('guideSet(true),true');
@@ -518,7 +754,7 @@ async function run(){
   }
   await wipe(); await load();
   for(const w of [320, 360, 414, 680]){ await size(w, 740); await ev('guideSet(true),true'); const on = await boxes(); await ev('guideSet(false),true'); const off = await boxes(); await ev('document.documentElement.setAttribute("data-guide","on"),localStorage.clear(),true'); if(on !== off) moved.push('first run@' + w); }
-  ok(moved.length === 0, 'nothing but the absorbing hairline moves between beginner and expert, on six screens at four widths', moved.join(' | '));
+  ok(moved.length === 0, 'nothing but the absorbing hairline moves between beginner and expert, on ten screens at four widths', moved.join(' | '));
   await size(320, 568);
 
   // ---- service worker ----------------------------------------------------------------------------------
