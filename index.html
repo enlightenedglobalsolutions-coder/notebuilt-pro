@@ -27,7 +27,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <!-- EGS-STD:coldopen-version -->
-<script>window.EGS_VERSION = '2026.10.12-1200 (900eab8)';</script>
+<script>window.EGS_VERSION = '2026.10.12-1411 (068d955)';</script>
 <title>Notebuilt Pro</title>
 <meta name="description" content="Task lists for a crew, sent by text. Private, on-device, by EGS.">
 <!-- EGS-STD:themes — this script runs BEFORE the stylesheet so the first paint
@@ -1618,7 +1618,7 @@ function navShow(name, y){ view = name; render(); window.scrollTo(0, y||0); }
 
 function go(name){
   if(!NAV_VIEWS.has(name)) name = NAV_ROOT;
-  if(sheetIsOpen()) closeSheet();
+  if(sheetIsOpen() && !closeSheet()) return;
   const y = window.scrollY;
   navOp(()=>{
     const s = navState(); if(!s || s.unseeded) return;
@@ -1664,6 +1664,13 @@ function navForeign(){
     history.replaceState({ np:1, g:1, d:0, v:NAV_ROOT, unseeded:1 }, '', navHash(NAV_ROOT));
     return;
   }
+  if(sheetIsOpen() && sheetDirty()){
+    /* Unsaved typing stays put. The entry is adopted as the sheet's own, so
+       the address is clean and back still closes the sheet. */
+    history.replaceState({ np:1, v:view, d:_navBase+2, o:'sheet' }, '', navHash(view));
+    toast(isReport ? 'Save or close this first, then tap the report link again.' : 'Save or close this first.');
+    return;
+  }
   const t = isReport ? NAV_ROOT : (navParseHash(location.hash) || view);
   if(sheetIsOpen()) hideSheet();
   _navBase = _navBase+1;
@@ -1677,7 +1684,16 @@ function navOnPop(e){
   const s = (e.state && e.state.np===1) ? e.state : null;
   if(!s){ navForeign(); return; }
   if(gate()) return;
-  if(sheetIsOpen()) hideSheet();                 /* back closes the sheet; nothing is re-pushed */
+  if(sheetIsOpen()){
+    /* Back closes the sheet. With unsaved typing it asks first, and a "no"
+       puts the sheet's entry back: the one place an entry is re-pushed,
+       because the phone's back cannot be refused, only undone. */
+    if(!discardOk()){
+      if(!s.o) history.pushState({ np:1, v:view, d:s.d+1, o:'sheet' }, '', navHash(view));
+      return;
+    }
+    hideSheet();
+  }
   if(s.o){ navTraverse(-1); return; }            /* forward onto a closed sheet's entry: step off it */
   if(s.g){
     /* Onto the guard: stay, say so, and let a second press leave. */
@@ -1724,10 +1740,27 @@ function sheet(html){
     history.pushState({ np:1, v:view, d:s.d+1, o:'sheet' }, '', navHash(view));
   });
 }
-function closeSheet(){
-  if(!sheetIsOpen()) return;
+/* Unsaved typing. A field that can be edited in a sheet carries data-orig,
+   the value it opened with; the sheet is dirty when any of them now differs.
+   Losing typed text is a small delete, so every way out of a dirty sheet
+   asks first: its scrim, the phone's back, a help marker, Archive. Only a
+   successful save leaves without asking. */
+function sheetDirty(){
+  return Array.prototype.some.call($mr.querySelectorAll('input[data-orig]'), i=>i.value.trim()!==i.dataset.orig);
+}
+function discardOk(){
+  return !sheetDirty() || confirm('Discard what you typed? It hasn\u2019t been saved.');
+}
+/* Returns false if the sheet stayed open. `saved` is for the caller that has
+   just written the sheet's fields down, so there is nothing left to lose. */
+function closeSheet(saved){
+  if(!sheetIsOpen()) return true;
+  if(!saved && !discardOk()) return false;
   hideSheet();
-  navOp(()=>{ const s = navState(); if(s && s.o) navTraverse(-1); });
+  /* Step off the sheet's entry. A link tapped while it was open can leave it
+     owning two, so keep stepping until the entry is a view's. */
+  navOp(function step(){ const s = navState(); if(s && s.o){ navTraverse(-1); navOp(step); } });
+  return true;
 }
 function reportNotYet(){
   sheet('<h2>A crew report</h2><p>That link is a report from one of your crew. This build can’t read reports yet, so I didn’t open it and nothing was changed.</p>'
@@ -1886,9 +1919,9 @@ function openRecord(kind, id){
   if(id && !r) return;
   const tag = ' data-kind="'+kind+'" data-id="'+esc(r?r.id:'')+'"';
   sheet(helpMark(u.help, true)+'<h2>'+esc(r?u.edit:u.add)+'</h2>'
-    +'<input class="input" id="rec-name" data-name-input data-role="'+kind+'" data-msg="rec-name-msg" data-exclude="'+esc(r?r.id:'')+'" type="text" autocapitalize="words" enterkeyhint="done" placeholder="Name" aria-label="Name" value="'+esc(r?r.name:'')+'">'
+    +'<input class="input" id="rec-name" data-name-input data-role="'+kind+'" data-msg="rec-name-msg" data-exclude="'+esc(r?r.id:'')+'" type="text" autocapitalize="words" enterkeyhint="done" placeholder="Name" aria-label="Name" data-orig="'+esc(r?r.name:'')+'" value="'+esc(r?r.name:'')+'">'
     +'<div class="field-msg" id="rec-name-msg" aria-live="polite"></div>'
-    +'<input class="input" id="rec-extra" style="margin-top:10px" type="text" enterkeyhint="done" placeholder="'+esc(u.extraHint)+'" aria-label="'+esc(u.extraLabel)+'" value="'+esc(r?r[k.extra]:'')+'">'
+    +'<input class="input" id="rec-extra" style="margin-top:10px" type="text" enterkeyhint="done" placeholder="'+esc(u.extraHint)+'" aria-label="'+esc(u.extraLabel)+'" data-orig="'+esc(r?r[k.extra]:'')+'" value="'+esc(r?r[k.extra]:'')+'">'
     +'<div class="field-msg bad" id="rec-extra-msg" aria-live="polite"></div>'
     +'<button class="btn primary block" data-action="rec-save"'+tag+'>Save</button>'
     +(r ? (r.archived ? '<button class="btn block" data-action="rec-unarchive"'+tag+'>Bring back</button>'
@@ -1920,7 +1953,7 @@ async function saveRecord(kind, id){
   xel.textContent = '';
   const list = recordsOf(kind), old = id ? list.find(x=>x.id===id) : null;
   if(id && !old) return;
-  if(old && old.name===r.name && old[k.extra]===extra){ closeSheet(); return; }     /* nothing changed, nothing written */
+  if(old && old.name===r.name && old[k.extra]===extra){ closeSheet(true); return; }     /* nothing changed, nothing written */
   const t = nowSec();
   /* The id is minted here, once, and an edit copies it across untouched. */
   const rec = cleanRecord(kind, Object.assign({ id:old?old.id:EGSCrew.newId(), name:r.name, archived:old?old.archived:false,
@@ -1929,19 +1962,22 @@ async function saveRecord(kind, id){
     showNameResult(el, { level:'bad', msg:'I couldn\u2019t save that on this phone. Nothing was changed.' });
     return;
   }
-  closeSheet(); render(); toast(old ? 'Saved' : 'Added');
+  closeSheet(true); render(); toast(old ? 'Saved' : 'Added');
   askPersist();
 }
 function setArchived(kind, id, flag){
   const list = recordsOf(kind), old = list.find(x=>x.id===id);
   if(!old || old.archived===flag) return;
+  /* Archive and Bring back act on the saved record, so edits typed into the
+     sheet and not saved would be lost. That is asked about first. */
+  if(!discardOk()) return;
   /* Archiving is this app's delete, so it asks first. Nothing is removed. */
   if(flag && !confirm('Archive '+old.name+'? Nothing is deleted. '+(kind==='worker'
       ? 'They stay on lists already sent, and you can bring them back from Archived.'
       : 'It stays on lists already sent, and you can bring it back from Archived.'))) return;
   const rec = Object.assign({}, old, { archived:flag, updatedAt:nowSec() });
   if(!putRecords(kind, list.map(x=>x.id===id?rec:x))){ toast('I couldn\u2019t save that on this phone.'); return; }
-  closeSheet(); render(); toast(flag ? 'Archived' : 'Brought back');
+  closeSheet(true); render(); toast(flag ? 'Archived' : 'Brought back');
 }
 function storeFresh(kind){
   const key = K[KINDS[kind].key];
@@ -2156,11 +2192,11 @@ async function saveName(input){
     return;
   }
   if(first){ view = NAV_ROOT; render(); window.scrollTo(0,0); askPersist(); }
-  else { closeSheet(); render(); toast('Name saved'); }
+  else { closeSheet(true); render(); toast('Name saved'); }
 }
 function openEditName(){
   sheet(helpMark('name', true)+'<h2>Your name</h2>'
-    +'<input class="input" id="edit-name" data-name-input data-role="boss" data-msg="edit-name-msg" type="text" autocomplete="name" autocapitalize="words" enterkeyhint="done" aria-label="Your name" value="'+esc(settings.boss.name)+'">'
+    +'<input class="input" id="edit-name" data-name-input data-role="boss" data-msg="edit-name-msg" type="text" autocomplete="name" autocapitalize="words" enterkeyhint="done" aria-label="Your name" data-orig="'+esc(settings.boss.name)+'" value="'+esc(settings.boss.name)+'">'
     +'<div class="field-msg" id="edit-name-msg" aria-live="polite"></div>'
     +'<p class="muted" style="margin-top:10px;font-size:13px">Changing your name keeps your ID, so lists you’ve already sent still match.</p>'
     +'<button class="btn primary block" data-action="name-save">Save</button>');
@@ -2364,7 +2400,8 @@ document.addEventListener('click', function(ev){
   if((el = t.closest('[data-back]'))){ navBack(); return; }
   if((el = t.closest('[data-go]'))){ go(el.dataset.go); return; }
   if((el = t.closest('[data-share-app]'))){ doShareApp(); return; }
-  if((el = t.closest('[data-help]'))){ openHelp(el.dataset.help); return; }
+  /* Help replaces whatever the sheet was showing. */
+  if((el = t.closest('[data-help]'))){ if(!sheetIsOpen() || discardOk()) openHelp(el.dataset.help); return; }
   if((el = t.closest('[data-copy]'))){ copyText(el.dataset.copy); return; }
   if((el = t.closest('[data-pay-tab]'))){
     /* A tab switch patches in place: no re-render, no scroll reset. */

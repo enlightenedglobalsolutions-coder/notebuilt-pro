@@ -357,11 +357,11 @@ async function run(){
   await shot('06-worker-sheet-warning-320');
   await click('[data-action="rec-save"]'); await closed('warned worker saved');
   ok((await stored('roster')).length === 5 && (await stored('roster'))[4].name === HAN, 'and the warning does not stop the save');
-  { const b4 = await snap();
+  { const b4 = await snap(); dialogs.answer = true;
     for(const [bad, why] of [['', /Type a name/], ['x'.repeat(41), /40 characters/], ['Joe <b>', /markup/]]){
       await click('[data-action="rec-add"]'); await type('#rec-name', bad); await click('[data-action="rec-save"]');
       await until(why.toString() + '.test(document.getElementById("rec-name-msg").textContent)', 4000, 'refusal ' + why);
-      await click('.scrim .help-corner'); await sleep(50); await ev('history.back()'); await closed(); }
+      await ev('history.back()'); await closed(); }
     await click('[data-action="rec-add"]'); await type('#rec-name', 'Sam'); await type('#rec-extra', 'n'.repeat(121)); await click('[data-action="rec-save"]');
     await until('/120 characters/.test(document.getElementById("rec-extra-msg").textContent)', 4000, 'long note refused');
     await ev('history.back()'); await closed();
@@ -428,6 +428,50 @@ async function run(){
   await until('/Beside the longest names you already have/.test(document.getElementById("edit-name-msg").textContent)', 5000, 'boss rename weighed against real names');
   ok(true, 'the boss\u2019s own name is weighed against the real crew and jobs once they exist');
   await ev('history.back()'); await closed();
+
+  // ---- unsaved typing ---------------------------------------------------------------------
+  section('Unsaved typing');
+  await click('[data-back]'); await until('location.hash==="#/home"', 4000, 'home'); await click('[data-go="crew"]');
+  const ask = async (label, act, expectOpen) => { dialogs.seen.length = 0; await act(); await sleep(300);
+    const open = await ev('!!document.getElementById("sheet-root").innerHTML');
+    ok(dialogs.seen.length === 1 && /Discard what you typed\? It hasn\u2019t been saved\./.test(dialogs.seen[0]) && open === expectOpen, label, dialogs.seen.join('|') + ' open=' + open); };
+  const quiet = async (label, act) => { dialogs.seen.length = 0; await act(); await closed(label); ok(dialogs.seen.length === 0, label, dialogs.seen.join('|')); };
+  const depth = await ev('history.state.d'), kept = await snap();
+  await openRec('amy'); await type('#rec-name', 'Amy B'); await type('#rec-extra', 'Painter');
+  dialogs.answer = false;
+  await ask('back out of a worker sheet with typed changes: it asks, and No keeps the sheet', () => ev('history.back()'), true);
+  ok((await ev('document.getElementById("rec-name").value')) === 'Amy B' && (await ev('document.getElementById("rec-extra").value')) === 'Painter' && (await ev('history.state.o')) === 'sheet' && (await ev('history.state.d')) === depth + 1 && (await ev('location.hash')) === '#/crew', 'what was typed is still there, and the sheet still owns its history entry');
+  await ask('tapping outside the sheet asks too', () => click('.scrim'), true);
+  await ask('so does a help marker, which would replace the sheet', () => click('.scrim .help-corner'), true);
+  await ask('and Archive, which acts on the saved record', () => click('[data-action="rec-archive"]'), true);
+  ok((await ev('!!document.getElementById("rec-name")')) && (await snap()) === kept, 'four refusals later the form is intact and nothing was written');
+  await ev('location.hash="#report=1ZZZZ"'); await sleep(300);
+  ok(/Save or close this first/.test(await text('#toast')) && (await ev('location.href')).indexOf('report=') < 0 && (await ev('document.getElementById("rec-name").value')) === 'Amy B', 'a report link tapped mid-edit is stripped from the address and the typing is kept');
+  dialogs.answer = true;
+  await ask('Yes discards and closes', () => ev('history.back()'), false);
+  await until('!history.state.o && history.state.d===' + depth, 4000, 'back on the Crew entry');
+  ok((await snap()) === kept && (await ev('location.hash')) === '#/crew' && (await names('#rec-list')).indexOf('amy') >= 0, 'discarding saves nothing and lands back on Crew');
+  await openRec('amy');
+  await quiet('a sheet with nothing typed closes without asking', () => ev('history.back()'));
+  await openRec('amy'); await type('#rec-name', 'Amy B'); await type('#rec-name', ' amy ');
+  await quiet('typing that ends up back where it started is not a change', () => click('.scrim'));
+  await openRec('amy'); await type('#rec-extra', 'Painter');
+  await quiet('Save never asks: there is nothing left to lose', () => click('[data-action="rec-save"]'));
+  ok((await stored('roster')).filter(w => w.name === 'amy')[0].note === 'Painter', 'and the save went through');
+  await click('[data-action="rec-add"]'); await type('#rec-name', 'Half typed'); dialogs.answer = false;
+  await ask('a new worker half typed asks before it is thrown away', () => ev('history.back()'), true);
+  dialogs.answer = true; await ask('and goes on Yes', () => click('.scrim'), false);
+  ok((await stored('roster')).every(w => w.name !== 'Half typed'), 'without being saved');
+  await click('[data-back]'); await until('location.hash==="#/home"', 4000, 'home'); await click('[data-go="jobs"]');
+  await openRec('Oak Street reno'); await type('#rec-extra', '14 Oak St'); dialogs.answer = false;
+  await ask('a job sheet asks the same way', () => ev('history.back()'), true);
+  dialogs.answer = true; await ev('history.back()'); await closed();
+  await click('[data-back]'); await until('location.hash==="#/home"', 4000, 'home'); await click('[data-go="settings"]');
+  await click('[data-action="edit-name"]'); await type('#edit-name', 'Mike Q'); dialogs.answer = false;
+  await ask('and so does the Your name sheet', () => ev('history.back()'), true);
+  dialogs.answer = true; await ev('history.back()'); await closed();
+  ok(JSON.parse(await raw('notebuiltpro.settings')).boss.name === 'Mike' && (await ev('location.hash')) === '#/settings', 'discarding there leaves the name as it was');
+  await click('[data-help="look"]'); await quiet('a help sheet has nothing to lose and never asks', () => ev('history.back()'));
 
   // ---- stores this phone cannot read -----------------------------------------------------
   section('Damaged crew or jobs');

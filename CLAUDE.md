@@ -62,7 +62,9 @@ job    { id, name, address, archived, createdAt, updatedAt }
   name go through the crew component. One bad record, or one id twice,
   refuses the whole array. Unknown keys are dropped.
 - `saveStore()` refuses a roster or jobs write that would make the stored
-  array shorter, unless it is a restore or a confirmed fresh start.
+  array shorter, unless it is a restore or a confirmed fresh start. A restore
+  passes `replace:true` and is not blocked: the test restores a backup with no
+  crew over a phone that has three.
 
 ### Schema
 
@@ -183,6 +185,16 @@ is asked once there is a name, and again after each worker or job is added.
   change. No inline handlers. `[data-go]`, `[data-back]`, `[data-share-app]`,
   `[data-pay-tab]`, `[data-copy]` and `[data-help]` are attribute hooks;
   everything else is `data-action`.
+- **Unsaved typing asks before it is lost.** An editable field in a sheet
+  carries `data-orig`, the value it opened with; `sheetDirty()` is true when
+  any differs after trimming. Every way out of a dirty sheet goes through
+  `discardOk()`: the scrim, the phone's back, a help marker, Archive and
+  Bring back. Only a successful save closes without asking
+  (`closeSheet(true)`). A refused back re-pushes the sheet's history entry,
+  the one place an entry is re-pushed, because the phone's back can only be
+  undone, not refused. A link tapped into the app mid-edit is stripped from
+  the address and the sheet is left as it was. The first-run name field is
+  not a sheet and is not covered.
 - **Back.** `popstate` is the only back path; the header arrow calls
   `history.back()`. The stack is guard, Home, deeper views, then the open
   sheet. A sheet owns an entry while it is open. Every history change queues
@@ -223,7 +235,7 @@ The file carries nine of the ten core `EGS-STD:` markers, plus `support`.
 
 ## Tests
 
-`node test_pro.js` — 262 checks, all passing. It serves this folder on
+`node test_pro.js` — 282 checks, all passing. It serves this folder on
 `127.0.0.1:8708` and drives real headless Chrome over CDP on real time.
 `--shots <dir>` also writes screenshots; `--bail` stops at the first failure.
 
@@ -232,6 +244,7 @@ first block of static checks (copies, markers, storage names, manifest).
 Covered: cold open with empty storage, the name check in all three roles,
 first run, restart, the schema stamp and a phone coming up from schema 1,
 Crew and Jobs (add, edit, sort, archive, bring back, refusals, escaping),
+unsaved typing on every way out of a sheet,
 damaged and newer stored data, export and restore round trip with crew and
 jobs, 33 hostile backup files, back and the hash, share, the install banner
 and each nudge trigger, the IndexedDB layout and its upgrade, 320px in both
@@ -251,8 +264,8 @@ Not covered:
   rollback path.
 - Contrast, beyond the version stamp. The colour tokens are Notebuilt's and
   were measured there.
-- Typed text surviving a back press. A worker or job is saved by the Save
-  button; backing out of the sheet discards what was typed and not saved.
+- Typed text surviving a reload. An update that reloads the page, or the
+  phone killing the app, still drops text typed into a sheet and not saved.
 
 ## Gotchas
 
