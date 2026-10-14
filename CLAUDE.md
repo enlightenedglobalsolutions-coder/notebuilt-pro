@@ -48,6 +48,9 @@ job    { id, name, address, archived, createdAt, updatedAt }
 
 - `id` is minted once by `EGSCrew.newId()` when the record is made. An edit
   copies it across untouched. `createdAt` never moves either.
+- **A permanent ID is 64 bits, 11 characters, and that length is permanent.**
+  The crew component accepts no other. See "Schema 4" below for the one time
+  IDs were changed, before any real list existed.
 - Times are epoch seconds. `note` is at most 120 characters and `address` 160,
   each on one line. Both stay on this phone; a list link carries only a
   worker's id and name, and a job's id and name.
@@ -68,27 +71,66 @@ job    { id, name, address, archived, createdAt, updatedAt }
 
 ### Schema
 
-- `PRO_SCHEMA_VERSION = 3`, in `index.html`. Absent reads as 1.
+- `PRO_SCHEMA_VERSION = 4`, in `index.html`. Absent reads as 1.
   - 1: settings alone.
   - 2: adds the roster and the jobs.
   - 3: adds lists, in IndexedDB.
+  - 4: permanent IDs are 64 bits. Versions 1 to 3 held 128-bit ones.
 - `PRO_MIGRATIONS` is the ladder. Rungs 2 and 3 convert nothing, because the
   version before never wrote what they add and an absent store reads as
   empty. They exist so the number tells the builds apart: a stage 2 build
   that opens stage 3 data shows its newer-version gate instead of exporting a
-  backup it believes has no lists in it. **The first rung that changes data
-  is still unwritten and untested**: it must name the store it changed in
-  `proSchemaDirty`, so the save that stamps the number writes that store
-  first.
+  backup it believes has no lists in it.
+- **Schema 4 is the first rung that changes data, and its function is
+  empty on purpose.** A store is judged as it is read, before any rung runs,
+  and the judge accepts one ID length. So the conversion happens at the read:
+  - `shortId()` turns a 128-bit ID into its own first 64 bits. The short ID
+    follows from the long one, so localStorage, IndexedDB and a backup file
+    are converted separately, in any order, and agree. Nothing has to be
+    remembered between them, and it is safe to run twice.
+  - `loadStore()` takes a `lift`. Each copy of settings is lifted by its own
+    `schemaVersion`, which is written in the same `setItem` as the boss's
+    ID, so the two cannot disagree.
+  - **The roster and the jobs are always lifted, whatever the number says.**
+    They carry no number, and the stamp is a separate write in another key,
+    so it can get ahead of them: the stage 3 build, still open in another
+    tab, saves the crew without touching settings. Keying their conversion
+    to the stamp turned such a crew from convertible into unreadable (the
+    Aug 15 Notebuilt finding again; caught before commit, Oct 14).
+  - A store whose copy on the phone still holds a long ID is named in
+    `proSchemaDirty` at load. The next save writes it, straight after the
+    number (`flushMigrated()`); one that will not go down stays named and
+    is tried again by the save after. `write.roster()` / `write.jobs()`
+    take a store off that list when they write it, so it is written once
+    and its `__bak` is the long-ID original.
+  - **The number goes down first, then the data.** The stage 3 build reads
+    the crew and jobs with no gate but the number, and a 64-bit ID fails
+    its check: it quietly falls back to the `__bak` copy, and its next save
+    writes that stale crew over the real one (seen in the test, before the
+    fix). So short IDs under a number below 4 must never be on the phone.
+    `commit()` stamps first and writes nothing if the stamp will not go
+    down; `saveSettings()` is `stamp()` then `flushMigrated()`. The one
+    exception is restore, whose writes and rollback run in one go with
+    nothing awaited between them. This reverses the order used through
+    stage 3; the platform rule is in `EGS-DECISIONS.md` ("A schema number
+    governs only the data written in the same call").
+  - **Where a number says 4 about the ID beside it, a long ID gets no help.**
+    Settings stamped 4 with a long boss ID are damaged; a backup file that
+    says schema 4 and holds a long ID is refused. A file is one write, so
+    its number cannot have got ahead of its contents.
+  - A route or a remembered last view spelled with a long job ID is not a
+    route, and lands on Home.
 - `proApplySchema()` reads the number at load and again at every restore.
-- **The stamp** is written in `saveSettings()` and nowhere else. `commit()`
-  (the roster and jobs save) and `listPut()` (a list save) write their data
-  and then call `saveSettings()` if the number on the phone is behind. All of
+- **The stamp** is written in `stamp()` and nowhere else. `commit()` (the
+  roster and jobs save) stamps before its data when the number is behind;
+  `listPut()` (a list save, in IndexedDB, which no older build can open)
+  writes its list and then calls `saveSettings()` if the number is behind or
+  a store is still waiting to be written short (`stampDue()`). All of
   them are only reached from a tap. Startup writes nothing to localStorage.
   On the first-run screen it does not touch IndexedDB either; once there is a
   name, the first render opens the database to read the lists, which creates
   it if it was not there.
-- **Newer data.** A stored `schemaVersion` above 2 shows a gate that says so,
+- **Newer data.** A stored `schemaVersion` above 4 shows a gate that says so,
   and nothing is written. The data is left exactly as found.
 - **Backup before write.** `saveStore()` copies the current value to
   `<key>__bak` before every write. `loadStore()` heals from that copy when the
@@ -102,7 +144,7 @@ job    { id, name, address, archived, createdAt, updatedAt }
 
 ### IndexedDB
 
-`IDB_VERSION = 2`, laddered in `idbOpen()`'s `onupgradeneeded`.
+`IDB_VERSION = 3`, laddered in `idbOpen()`'s `onupgradeneeded`.
 
 - `lists`, keyed by `listId`: one record is the boss's full list for one
   job's day, with its sent map. Every worker's slice shares that `listId`.
@@ -112,7 +154,18 @@ job    { id, name, address, archived, createdAt, updatedAt }
   upgrade counts the old store first. Empty, it is dropped and remade. If it
   holds anything, the upgrade aborts, nothing is touched, and export fails
   loudly.
-- `reports` has no record shape yet. Stage 4 defines it.
+- Version 3 goes with schema 4. Every list holding a 128-bit ID is put back
+  under its short `listId`, with short IDs inside (`liftList()`), in the one
+  upgrade transaction. Its `queue` is dropped: those links were format
+  version 2 and nothing opens them now. `sent` is kept. If two lists would
+  land on one short `listId`, the add fails, the upgrade aborts, and the
+  database stays at version 2 untouched. A list with no long ID is not
+  rewritten.
+- The database is only opened once there is a name, so localStorage and
+  IndexedDB are converted at different moments. That is safe because both
+  reach the same short IDs.
+- `reports` has no record shape yet. Stage 4 defines it. The version 3 step
+  does not touch `reports`: it is empty in every build so far.
 
 ### Lists
 
@@ -196,9 +249,10 @@ One record is one job's day for the whole crew:
   `sendId`, and the worker's phone follows the newest.
 - The text shared is one line (`<boss>: tasks for <job>, <day>`, with the
   part number when there is more than one) and the link on the next line.
-- Measured in the test run: ten ordinary tasks (about 45 characters each)
-  with short names come to about 670 characters, one part. An eleventh would
-  split. Eight 200-character Cyrillic tasks go as eight parts.
+- Measured with 128-bit IDs: ten ordinary tasks (about 45 characters each)
+  with short names came to about 670 characters, one part, and an eleventh
+  would split. With 64-bit IDs the same list is about 620, and an eleventh
+  fits. Eight 200-character Cyrillic tasks go as eight parts.
 
 ### Backup file
 
@@ -208,6 +262,12 @@ One record is one job's day for the whole crew:
 { app:"notebuilt-pro", kind:"backup", version:1, exportedAt, appVersion,
   settings, roster:[...], jobs:[...], crew:{ lists:[...], reports:[] } }
 ```
+
+A file whose settings say schema 3 or less holds 128-bit IDs. `readBackup()`
+shortens them the same way the phone's own were, then checks everything as
+usual. A file that says schema 4 is checked as it stands. `BACKUP_VERSION`
+did not move: the file's shape is the same, and the schema number in its
+settings already says which IDs it holds.
 
 `readBackup()` treats the file as untrusted: 5 MB cap, strict shape, the boss
 checked by the crew component, the roster and jobs through `cleanRecords()`,
@@ -266,7 +326,7 @@ is asked once there is a name, and again after each worker or job is added.
 
 ## Structure
 
-- One file, `index.html`, about 3,290 lines. No build step, no framework.
+- One file, `index.html`, about 3,390 lines. No build step, no framework.
 - Script blocks, in order: version stamp, theme pre-paint, the crew component,
   the app, service-worker registration.
 - `gate()` decides whether a gate owns the screen: `future`, `damaged`,
@@ -343,7 +403,7 @@ The file carries nine of the ten core `EGS-STD:` markers, plus `support`.
 
 ## Tests
 
-`node test_pro.js` — 468 checks, all passing. It serves this folder on
+`node test_pro.js` — 515 checks, all passing. It serves this folder on
 `127.0.0.1:8708` and drives real headless Chrome over CDP on real time.
 `--shots <dir>` also writes screenshots; `--bail` stops at the first failure.
 
@@ -362,14 +422,32 @@ damaged and newer stored data, export and restore round trip with crew, jobs
 and lists, 33 hostile backup files and 27 hostile lists, damaged lists, back
 and the hash, share, the install banner and each nudge trigger, the IndexedDB
 layout and its upgrade, 320px in both themes on every screen and sheet,
-beginner mode reflow on fourteen screens at four widths, and the service
-worker including a reload with the server gone.
+beginner mode reflow on fourteen screens at four widths, the service
+worker including a reload with the server gone, and a phone holding 128-bit
+IDs (schema 3, database version 2) coming through to schema 4: opening
+without a write, the crew, jobs and list intact under short IDs, the first
+save in either order, a send that decodes, an old backup restored,
+a migration interrupted partway (storage refuses the jobs write) and one
+the stamp got ahead of (a stage 3 tab saved the crew after it), each
+opening with nothing refused and finished by the next save, long IDs refused
+where a number written with them says 4, two lists that would collide, and
+the real stage 3 build (served from git at `/stage3/` on the same origin)
+opened on every state this build can leave: it stops at its newer-version
+screen, or finds its own shape untouched, and writes nothing.
 
 The third refusal cannot be reached with today's limits, so its test makes
 the component say it and checks what the app then shows.
 
 Not covered:
 - A real phone, for this stage. Stages 1 and 2 were checked on a device.
+- **A stage 3 tab that was already open when this build stamped 4.** It
+  read the crew at its own load and never reads it again, so it holds the
+  old crew in memory, and its next crew save writes that over whatever this
+  build saved since. This build reads what it wrote (long IDs are
+  converted), but an edit made here in between is lost. Two open tabs of
+  the same build have always worked this way: whoever saves last wins. It
+  is not new with schema 4 and is not handled. Close other copies of the
+  app before updating.
 - **The real share sheet, and a real text message.** The test replaces
   `navigator.share`. Whether a link arrives whole and tappable is a phone
   test.
@@ -382,9 +460,10 @@ Not covered:
   automatic reload).
 - `navigator.storage.persist()`'s real answer. The nudge tests force it each
   way.
-- A rung in `PRO_MIGRATIONS` that changes data.
+- A restore that fails halfway on a phone still waiting to write its short
+  IDs. The rollback puts `proSchemaDirty` back; nothing tests it.
 - Storage that refuses writes (quota, private mode), including the restore
-  rollback path.
+  rollback path. The one exception is the interrupted schema 4 migration.
 - Contrast, beyond the version stamp. The colour tokens are Notebuilt's and
   were measured there.
 - Typed text surviving a reload. An update that reloads the page, or the
@@ -392,6 +471,10 @@ Not covered:
 
 ## Gotchas
 
+- The old-tab checks serve `index.html` from `STAGE3_REV` (`3568279`, the
+  stage 3 build as it went live) by `git show`, so they need this folder's
+  git history; without it they print SKIP. They can go once no stage 3
+  build is left running anywhere.
 - `test_pro.js` uses port 8708. A service worker left on a shared port serves
   the wrong app, so don't reuse it. (`NBPRO_TEST_PORT` overrides it, for
   mutation runs side by side.)
@@ -412,8 +495,16 @@ Not covered:
 - The beginner-mode test ignores `.rule`: that hairline exists to give up the
   marker's width so nothing else moves. Markers are hosted only in a
   `.sec-head` or as a sheet's `.help-corner`.
-- A 22-character string of the right alphabet is not always a valid ID: the
-  last character can only be `A`, `Q`, `g` or `w`. The component decides.
+- An 11-character string of the right alphabet is not always a valid ID: the
+  last character carries four bits, so it is one of sixteen
+  (`AEIMQUYcgkosw048`). The component decides.
+- **Shorter IDs moved the name warnings.** A 40-character Cyrillic name used
+  to warn `tight` and now does not. Names alone no longer fill a link, so
+  `none` needs three 40-character names in 4-byte characters and is right at
+  the line (the test's fixed fixture measures just over).
+- `shortId()`, the `lift*` functions and the `LONG_ID_RE` they share are the
+  only code that knows the old length. They can go when no stage 3 phone or
+  backup is left to convert. Nothing else may use them.
 - `PAYMENT_CONFIG` has only the Interac address. The other tabs say they are
   not set up, rather than linking nowhere.
 - Editing: nobody's data is at stake until the pilot, so direct edits are

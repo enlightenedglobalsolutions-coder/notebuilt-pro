@@ -27,7 +27,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <!-- EGS-STD:coldopen-version -->
-<script>window.EGS_VERSION = '2026.10.12-1648 (aabf331)';</script>
+<script>window.EGS_VERSION = '2026.10.14-1114 (3568279)';</script>
 <title>Notebuilt Pro</title>
 <meta name="description" content="Task lists for a crew, sent by text. Private, on-device, by EGS.">
 <!-- EGS-STD:themes — this script runs BEFORE the stylesheet so the first paint
@@ -326,11 +326,11 @@
 //
 //  Wire (positional arrays, then UTF-8 → deflate-raw → base64url, with the
 //  codec character '1' in front so a future codec can be told apart):
-//    LIST   [2,'l',listId,issuedAt,[bossId,bossName],[jobId,jobName],day,
+//    LIST   [3,'l',listId,issuedAt,[bossId,bossName],[jobId,jobName],day,
 //            mode(0 private|1 crew),[[workerId,name]...],
 //            [[taskId,workerIdx,text,order,editedAt,gone(0|1 cancelled|2 reassigned)]...],
 //            [sendId,part,parts]]
-//    REPORT [2,'r',listId,workerId,sentAt,[[taskId,status(0 open|1 done|2 waiting),note,changedAt]...],
+//    REPORT [3,'r',listId,workerId,sentAt,[[taskId,status(0 open|1 done|2 waiting),note,changedAt]...],
 //            [sendId,part,parts]]
 //
 //  Everything that decodes a payload returns {ok:true,value} or
@@ -340,9 +340,12 @@
 (function(global){
   'use strict';
 
-  // Version 2 (Oct 2026): the wire gained the trailing [sendId,part,parts].
-  // Version 1 was never used outside testing; a v1 payload is refused as 'older'.
-  var FORMAT = 'egs-crew', VERSION = 2, CODEC = '1';
+  // Version 3 (Oct 2026): permanent ids went from 128 bits to 64. The layout
+  // is version 2's; only the id length moved.
+  // Version 2 added the trailing [sendId,part,parts]; version 1 was the layout
+  // before that. Neither was used outside testing, and a payload of either is
+  // refused as 'older', by its version, before anything in it is looked at.
+  var FORMAT = 'egs-crew', VERSION = 3, CODEC = '1';
 
   // §4 starting limits. Text lengths count characters (code points), not bytes.
   var LIMITS = { name:40, text:200, note:280, tasks:300, workers:30,
@@ -359,10 +362,15 @@
     report: 'https://pro.notebuilt.ca/#report='   // URL pending (spec §13)
   };
 
-  // Permanent ids: 128 random bits as base64url = 22 chars, and the last char
-  // carries only 4 bits, so it can only be A, Q, g or w. Holding ids to that
-  // canonical form means one id has exactly one spelling.
-  var ID_RE = /^[A-Za-z0-9_-]{21}[AQgw]$/;
+  // Permanent ids (list, boss, job, worker): 64 random bits as base64url = 11
+  // chars. The last char carries only 4 bits, so it is one of 16 — every
+  // fourth letter of the alphabet. Holding ids to that canonical form means
+  // one id has exactly one spelling.
+  // 64 bits is the PERMANENT length: ids are minted once and never change, so
+  // this cannot move after the first real list goes out. Random bytes are the
+  // one thing in a link that never compresses, and a slice carries four ids.
+  // This is the only id shape accepted. There is no second length.
+  var ID_RE = /^[A-Za-z0-9_-]{10}[AEIMQUYcgkosw048]$/;
   // Send ids: 48 random bits as base64url = 8 chars. One per send; every part
   // of that send carries it.
   var SEND_RE = /^[A-Za-z0-9_-]{8}$/;
@@ -455,7 +463,7 @@
   }
 
   function newId(){
-    var b = new Uint8Array(16);
+    var b = new Uint8Array(8);
     global.crypto.getRandomValues(b);
     return b64e(b);
   }
@@ -1109,7 +1117,7 @@ const DEVICE = {
 /* Lists and reports grow every day, so they live in IndexedDB. The store
    layout is versioned by IDB_VERSION; the database name never changes. */
 const IDB_NAME = 'notebuiltpro';
-const IDB_VERSION = 2;
+const IDB_VERSION = 3;
 const IDB_STORES = ['lists','reports'];
 /* Left behind on this origin by the self-check harness this app replaced.
    Never read. Removed by the first ordinary save, so startup stays write-free. */
@@ -1193,8 +1201,7 @@ function isObj(v){ return !!v && typeof v==='object' && !Array.isArray(v); }
 
    Either way it is a warning, shown while typing. The send-time refusal
    (spec rule 12) stays as the backstop. */
-const PROBE = { list:'pW-N4rLfrZcXMscDWJ1kUw', boss:'z8B1c-Pt4QmhAPVkB_eN3g', job:'Rrq5HCsDsEf_o8xyIx_dFA',
-                worker:'GhhnfyM2GYMG7Cjl-1gaNQ', send:'N4xvgQX-' };
+const PROBE = { list:'pW-N4rLfrZc', boss:'z8B1c-Pt4Qk', job:'Rrq5HCsDsEc', worker:'GhhnfyM2GYM', send:'N4xvgQX-' };
 /* A task at the text limit that compresses about as badly as real Latin text
    can: fixed, so the same name always gets the same answer. */
 const PROBE_TASK = (function(){
@@ -1280,7 +1287,7 @@ async function nameCheck(raw, role, excludeId, given){
        file, never the phone.
 
    They are never compared and never assigned across. */
-const PRO_SCHEMA_VERSION = 3;
+const PRO_SCHEMA_VERSION = 4;
 
 /* The ladder — the registration point. The key is the version being migrated
    TO, and the function takes the stored shape from key-1 up to key, in
@@ -1289,12 +1296,27 @@ const PRO_SCHEMA_VERSION = 3;
 
    A rung runs in memory because nothing about startup may write. So a rung
    that changed a store names it in proSchemaDirty, and the same ordinary
-   save that stamps the number writes that store down first. `settings` is
-   never named: saveSettings IS the save doing the flushing.
+   save that stamps the number writes that store down straight after it.
+   `settings` is never named: saveSettings IS the save doing the flushing.
+
+   The number only governs what is written in the same call as the number:
+   here, the settings it sits in. The roster and the jobs are other keys,
+   so the order between them and the number is a choice, and it is made for
+   the older build, not this one. The number goes down FIRST. An older build
+   that opens the phone after that sees a newer number and stops at its gate
+   before it reads anything; one that opened it before sees only the old
+   shape. Data in the new shape under the old number is the one state that
+   must never exist, because an older build reads that without a gate (the
+   stage 3 build drops a crew it cannot read for its __bak copy, quietly,
+   and its next save writes that stale copy back). This build, for its part,
+   never trusts the number about another key: it reads the roster and the
+   jobs in either shape (liftRecordsCopy).
 
    Version 1 was settings alone: {schemaVersion, boss:{id, name}}.
    Version 2 adds the roster and the jobs, each an array of records.
-   Version 3 adds lists, in IndexedDB: one record per job's day. */
+   Version 3 adds lists, in IndexedDB: one record per job's day.
+   Version 4 holds 64-bit permanent IDs (11 characters) where versions 1 to 3
+   held 128-bit ones (22). 64 bits is the permanent length. */
 const PRO_MIGRATIONS = {
   /* 1 -> 2: nothing to convert. Version 1 never wrote the roster or the jobs,
      and an absent store reads as empty, so the data is already in shape.
@@ -1305,12 +1327,62 @@ const PRO_MIGRATIONS = {
   /* 2 -> 3: nothing to convert either. Version 2 never wrote a list, and an
      empty store reads as no lists. The number moves so a version 2 build
      shows its gate rather than exporting a backup it believes has no lists
-     in it. The next rung is the first that changes data, and it names the
-     store it changed:
-       4: function(){ roster.forEach(function(w){ ... }); proSchemaDirty.add('roster'); } */
-  3: function(){}
+     in it. */
+  3: function(){},
+  /* 3 -> 4: the first rung that changes data. Every permanent ID on this
+     phone goes from 128 bits to 64: the boss's, each worker's, each job's,
+     and (in IndexedDB, by its own ladder) each list's.
+
+     The work is not done here, because it cannot be. A store is judged as
+     it is read, before any rung runs, and the judge accepts one ID length.
+     So the IDs are shortened where the data is read (shortId and the lift
+     functions below), and then judged. Settings are lifted when their own
+     number is below 4; settings stamped 4 holding a long ID are damaged.
+     The roster and the jobs are always lifted (see liftRecordsCopy): the
+     stamp lives in another key and can get ahead of them. A store whose
+     copy on this phone still holds a long ID is named in proSchemaDirty at
+     load, and the next save writes it, whatever the number already says. */
+  4: function(){}
 };
 const proSchemaDirty = new Set();
+
+/* ---------- schema 4: one ID, shortened the same way everywhere ----------
+   A long ID was 16 random bytes. Its short form is the first 8 of them: the
+   first ten characters, and the eleventh with its low two bits dropped.
+   Half of a random value is as random as a fresh one of that size, and
+   because the short ID follows from the long one, every place that holds an
+   ID reaches the same answer on its own. localStorage, IndexedDB and a
+   backup file are converted separately, in any order, and still agree; an
+   app closed halfway through loses nothing. Anything that is not exactly a
+   long ID is handed back untouched, so running it twice changes nothing.
+
+   This reads the old shape only to convert it. Nothing is ever written,
+   sent or validated with a long ID again. */
+const LONG_ID_RE = /^[A-Za-z0-9_-]{21}[AQgw]$/;
+const B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+let _shortened = 0;
+function shortId(s){
+  if(typeof s!=='string' || !LONG_ID_RE.test(s)) return s;
+  _shortened++;
+  return s.slice(0,10)+B64URL[B64URL.indexOf(s[10]) & 60];
+}
+function liftPair(p){ return isObj(p) ? Object.assign({}, p, { id:shortId(p.id) }) : p; }
+function liftSettings(o){ return (isObj(o) && isObj(o.boss)) ? Object.assign({}, o, { boss:liftPair(o.boss) }) : o; }
+function liftRecords(a){ return Array.isArray(a) ? a.map(liftPair) : a; }
+/* A list comes back as the same object when it held no long ID. One that
+   did loses its half-finished send, as a restore does: those links were
+   made in the old format, and no phone opens them now. */
+function liftList(o){
+  if(!isObj(o)) return o;
+  const n = _shortened;
+  const out = Object.assign({}, o, { listId:shortId(o.listId), boss:liftPair(o.boss), job:liftPair(o.job) });
+  if(Array.isArray(o.workers)) out.workers = o.workers.map(liftPair);
+  if(Array.isArray(o.tasks)) out.tasks = o.tasks.map(t=>isObj(t) ? Object.assign({}, t, { worker:shortId(t.worker) }) : t);
+  if(isObj(o.sent)){ out.sent = {}; Object.keys(o.sent).forEach(w=>{ out.sent[shortId(w)] = o.sent[w]; }); }
+  if(_shortened===n) return o;
+  out.queue = {};
+  return out;
+}
 
 /* Absent means version 1. Anything that is not a sane number reads the same
    way: the conservative answer, never a guess upward. */
@@ -1342,10 +1414,13 @@ function proApplySchema(from){
    damaged original is the only evidence left, and the damaged gate says so. */
 const unreadable = new Set();
 function parse(raw){ if(raw==null) return undefined; try{ return JSON.parse(raw); }catch(e){ return undefined; } }
-function loadStore(k, ok, fallback){
+/* lift(value, isBackupCopy), when given, runs before the check: it is how
+   data written before schema 4 gets its short IDs (above). */
+function loadStore(k, ok, fallback, lift){
+  const read = (name, bak)=>{ const v = parse(lsGet(name)); return (v!==undefined && lift) ? lift(v, bak) : v; };
   const raw = lsGet(k);
-  if(raw!=null){ const v = parse(raw); if(v!==undefined && ok(v)) return v; }
-  const b = parse(lsGet(k+'__bak'));
+  if(raw!=null){ const v = read(k, false); if(v!==undefined && ok(v)) return v; }
+  const b = read(k+'__bak', true);
   if(b!==undefined && ok(b)) return b;
   if(raw!=null) unreadable.add(k);
   return fallback();
@@ -1426,35 +1501,43 @@ function cleanRecords(kind, arr){
   return out;
 }
 
-let settings = loadStore(K.settings, settingsOk, ()=>({}));
-let roster = cleanRecords('worker', loadStore(K.roster, v=>!!cleanRecords('worker', v), ()=>[]));
-let jobs = cleanRecords('job', loadStore(K.jobs, v=>!!cleanRecords('job', v), ()=>[]));
-const write = { roster:opts=>saveStore(K.roster, roster, opts), jobs:opts=>saveStore(K.jobs, jobs, opts) };
+/* Settings carry their own number, written in the same setItem as the boss's
+   ID, so the two cannot disagree: each copy is lifted by what it says.
+
+   The roster and the jobs carry no number, and they are written separately
+   from the one that describes them, so the number on this phone can never
+   be trusted to say what shape they are in. A stage 3 build still open in
+   another tab saves the crew without touching settings, after this build
+   has stamped 4. If the number decided, that save would turn a crew this
+   build can convert into one it refuses. So every copy of both is lifted,
+   whatever the number says. It changes nothing in data that is already
+   short. */
+const liftSettingsCopy = v=>proSchemaOf(v)<4 ? liftSettings(v) : v;
+const liftRecordsCopy = v=>liftRecords(v);
+let settings = loadStore(K.settings, settingsOk, ()=>({}), liftSettingsCopy);
+let roster = cleanRecords('worker', loadStore(K.roster, v=>!!cleanRecords('worker', v), ()=>[], liftRecordsCopy));
+let jobs = cleanRecords('job', loadStore(K.jobs, v=>!!cleanRecords('job', v), ()=>[], liftRecordsCopy));
+/* A store that was read, and whose copy on this phone still spells an ID
+   the long way, is written by the next save, straight after the number. */
+['roster','jobs'].forEach(name=>{
+  const on = parse(lsGet(K[name]));
+  if(!unreadable.has(K[name]) && Array.isArray(on) && on.some(o=>isObj(o) && LONG_ID_RE.test(o.id))) proSchemaDirty.add(name);
+});
+/* A store just written is no longer waiting to be. */
+const wrote = (name, ok)=>{ if(ok) proSchemaDirty.delete(name); return ok; };
+const write = { roster:opts=>wrote('roster', saveStore(K.roster, roster, opts)), jobs:opts=>wrote('jobs', saveStore(K.jobs, jobs, opts)) };
 /* A store whose unreadable original the user chose to replace. */
 const startedFresh = new Set();
 /* Read at load. It migrates in memory only; the number waits for the next
    ordinary save to be stamped. */
 proApplySchema(proSchemaOf(settings));
 
-function saveSettings(opts){
+/* THE STAMP — here and nowhere else. It is only ever reached from something
+   a person did, which is what keeps the number out of startup. The number
+   goes first and the rest follows in a fixed order, so the same data always
+   serialises to the same bytes. */
+function stamp(opts){
   if(schemaFromFuture) return false;            /* never write a shape this build does not understand */
-  /* Whatever a rung changed in memory is written BEFORE the number that
-     describes it. If one of those writes fails the stamp is held back and
-     this save does nothing: a number claiming v2 over data still shaped v1
-     turns a retryable failure into a rung skipped forever. */
-  if(proSchemaDirty.size){
-    for(const name of proSchemaDirty){
-      if(name!=='settings' && write[name] && !write[name]()){
-        console.warn('Notebuilt Pro: migrated data would not persist, so the schema number is held back');
-        return false;
-      }
-    }
-    proSchemaDirty.clear();
-  }
-  /* THE STAMP — here and nowhere else. This function is only ever reached
-     from something a person did, which is what keeps the number out of
-     startup. The number goes first and the rest follows in a fixed order, so
-     the same data always serialises to the same bytes. */
   const out = { schemaVersion:proSchemaReached };
   Object.keys(settings).forEach(k=>{ if(k!=='schemaVersion') out[k] = settings[k]; });
   if(!saveStore(K.settings, out, opts)) return false;
@@ -1462,16 +1545,32 @@ function saveSettings(opts){
   try{ if(localStorage.getItem(HARNESS_KEY)!=null) localStorage.removeItem(HARNESS_KEY); }catch(e){}
   return true;
 }
+/* What a rung changed in memory, written down AFTER the number (see the
+   ladder). One that will not go down stays named and is tried again by the
+   next save; this build reads it in either shape meanwhile. */
+function flushMigrated(){
+  for(const name of Array.from(proSchemaDirty)){
+    if(write[name] && !write[name]()) console.warn('Notebuilt Pro: '+name+' is still in the old shape; the next save tries again');
+  }
+}
+function saveSettings(opts){
+  if(!stamp(opts)) return false;
+  flushMigrated();
+  return true;
+}
 
-/* A roster or jobs save, from a tap. The data goes down first; then, if the
-   number on this phone is behind the shape just written, the same tap stamps
-   it. The stamp follows the data, it never leads it. */
+/* A roster or jobs save, from a tap. If the number on this phone is behind,
+   it goes down first, and if it will not, nothing is written: the store
+   must never reach the new shape under the old number. Then the store,
+   then whatever else is still waiting to be written in the new shape. */
+function stampDue(){ return settings.schemaVersion!==proSchemaReached || proSchemaDirty.size>0; }
 function commit(name){
   if(schemaFromFuture) return false;
+  if(settings.schemaVersion!==proSchemaReached && !stamp()) return false;
   const key = K[name], fresh = startedFresh.has(key);
   if(!write[name](fresh ? { replace:true } : undefined)) return false;
   startedFresh.delete(key);
-  if(settings.schemaVersion!==proSchemaReached) saveSettings();
+  flushMigrated();
   return true;
 }
 
@@ -1487,7 +1586,12 @@ function idbOpen(){
             list, so two workers' reports never share a record. Version 1
             keyed it by listId alone and never wrote to it. The old store is
             dropped only after counting it empty; if it somehow holds
-            anything, the upgrade aborts and nothing is touched. */
+            anything, the upgrade aborts and nothing is touched.
+         3: permanent IDs went from 128 bits to 64 (schema 4, below). Every
+            list still holding a long ID is put back under its short listId
+            with the short IDs inside it, in this one transaction: all of
+            them or none. Two lists landing on one short listId fails the
+            add, which aborts the upgrade and leaves everything as it was. */
     req.onupgradeneeded = function(ev){
       const db = req.result, tx = req.transaction;
       if(ev.oldVersion < 1) db.createObjectStore('lists', { keyPath:'listId' });
@@ -1498,6 +1602,14 @@ function idbOpen(){
           const c = tx.objectStore('reports').count();
           c.onsuccess = ()=>{ if(c.result>0){ tx.abort(); return; } db.deleteObjectStore('reports'); make(); };
         }
+      }
+      if(ev.oldVersion >= 1 && ev.oldVersion < 3){
+        const st = tx.objectStore('lists'), all = st.getAll();
+        all.onsuccess = ()=>{
+          const moved = all.result.map(rec=>[rec, liftList(rec)]).filter(m=>m[1]!==m[0]);
+          moved.forEach(m=>st.delete(m[0].listId));
+          moved.forEach(m=>st.add(m[1]));
+        };
       }
     };
     req.onsuccess = ()=>resolve(req.result);
@@ -1671,7 +1783,7 @@ async function listPut(next, quiet){
   try{ await idbPutList(rec); }catch(e){ console.warn('Notebuilt Pro: list save failed', e); return false; }
   lists = old ? lists.map(l=>l.listId===rec.listId ? rec : l) : lists.concat([rec]);
   if(!quiet) rev++;
-  if(settings.schemaVersion!==proSchemaReached) saveSettings();
+  if(stampDue()) saveSettings();
   return true;
 }
 /* One list change at a time, each built on the last one written. */
@@ -1968,7 +2080,7 @@ function routeOf(v){ const p = String(v).split('/'); return { base:p[0], jobId:p
    this phone and a day the component accepts. Anything else is not a route. */
 function navValid(v){
   if(typeof v!=='string' || v.length>48) return null;
-  const m = /^([a-z]{1,12})(?:\/([A-Za-z0-9_-]{22})\/(\d{4}-\d{2}-\d{2}))?$/.exec(v);
+  const m = /^([a-z]{1,12})(?:\/([A-Za-z0-9_-]{11})\/(\d{4}-\d{2}-\d{2}))?$/.exec(v);
   if(!m) return null;
   if(!m[2]) return NAV_VIEWS.has(m[1]) ? v : null;
   return (NAV_PARAM.has(m[1]) && dayOk(m[3]) && jobs.some(j=>j.id===m[2])) ? v : null;
@@ -2992,10 +3104,14 @@ function readBackup(text){
   if(s.schemaVersion!==undefined && !(typeof s.schemaVersion==='number' && Number.isInteger(s.schemaVersion) && s.schemaVersion>=1))
     return no('That backup doesn’t check out, so I didn’t use any of it.');
   if(proSchemaOf(s)>PRO_SCHEMA_VERSION) return no('That backup was made by a newer version of '+APP_NAME+'. Update the app, then restore it.');
-  if(!bossValid(s.boss.id, s.boss.name).ok) return no('The name or ID in that backup doesn’t check out, so I didn’t use any of it.');
+  /* A backup from before schema 4 holds long IDs. They are shortened the
+     same way this phone's own were, and then everything is judged as usual.
+     A file that says schema 4 gets no such help: a long ID in it is a bad ID. */
+  const old = proSchemaOf(s)<4, sB = old ? liftSettings(s).boss : s.boss;
+  if(!bossValid(sB.id, sB.name).ok) return no('The name or ID in that backup doesn’t check out, so I didn’t use any of it.');
   /* The crew and the jobs go through the same judge as the copies on this
      phone. One bad record, or one id twice, refuses the whole file. */
-  const ros = cleanRecords('worker', o.roster), jb = cleanRecords('job', o.jobs);
+  const ros = cleanRecords('worker', old ? liftRecords(o.roster) : o.roster), jb = cleanRecords('job', old ? liftRecords(o.jobs) : o.jobs);
   if(!ros || !jb) return no('Someone on the crew or one of the jobs in that backup doesn\u2019t check out, so I didn\u2019t use any of it.');
   /* Lists go through the same judge as the ones on this phone: one bad
      list refuses the whole file. Reports have no shape in this build, so
@@ -3007,12 +3123,12 @@ function readBackup(text){
     if(!isObj(o.crew) || !IDB_STORES.every(n=>Array.isArray(o.crew[n]))) return no('That backup doesn\u2019t check out, so I didn\u2019t use any of it.');
     if(o.crew.reports.length)
       return no('That backup holds crew reports, which this version can\u2019t check yet, so I didn\u2019t use any of it. Update the app, then restore it.');
-    const ls = cleanLists(o.crew.lists, true);
+    const ls = cleanLists(old ? o.crew.lists.map(liftList) : o.crew.lists, true);
     if(!ls) return no('One of the lists in that backup doesn\u2019t check out, so I didn\u2019t use any of it.');
     crew = { lists:ls, reports:[] };
   }
   const when = (typeof o.exportedAt==='string' && o.exportedAt.length<=40 && Date.parse(o.exportedAt)) ? new Date(Date.parse(o.exportedAt)).toISOString() : null;
-  return { ok:true, schema:proSchemaOf(s), boss:{ id:s.boss.id, name:s.boss.name }, roster:ros, jobs:jb, crew:crew, exportedAt:when };
+  return { ok:true, schema:proSchemaOf(s), boss:{ id:sB.id, name:sB.name }, roster:ros, jobs:jb, crew:crew, exportedAt:when };
 }
 async function doRestore(file){
   if(!file) return;
@@ -3041,18 +3157,22 @@ async function doRestore(file){
     try{ crewWas = await idbDump(); await idbReplace(b.crew); }
     catch(e){ restoreRefused('I couldn\u2019t write to this phone\u2019s storage, so nothing was restored.'); return; }
   }
-  /* Data before the number that describes it: crew, jobs, then settings,
-     which carries the stamp. If any write fails, the ones already made are
-     put back from what was there. An empty store that was never written
-     stays unwritten, so a round trip leaves the same keys behind. */
+  /* Crew, jobs, then settings, which carries the stamp. If any write fails,
+     the ones already made are put back from what was there. This is the one
+     place the data goes before the number, and it can, because all three
+     writes and any putting back run in one go with nothing awaited between
+     them: no state with short IDs under an old number is ever left behind.
+     An empty store that was never written stays unwritten, so a round trip
+     leaves the same keys behind. */
   const was = { settings:settings, roster:roster, jobs:jobs, future:schemaFromFuture, reached:proSchemaReached,
-                raw:{ roster:lsGet(K.roster), jobs:lsGet(K.jobs) } };
+                dirty:Array.from(proSchemaDirty), raw:{ roster:lsGet(K.roster), jobs:lsGet(K.jobs) } };
   roster = b.roster; jobs = b.jobs; settings = { boss:b.boss };
   proApplySchema(b.schema);       /* the number is read off the restored data, never carried over */
   const put = name=>((name==='roster'?roster:jobs).length===0 && was.raw[name]==null) || write[name]({ replace:true });
   if(!(put('roster') && put('jobs') && saveSettings({ replace:true }))){
     roster = was.roster; jobs = was.jobs; settings = was.settings; schemaFromFuture = was.future; proSchemaReached = was.reached;
     ['roster','jobs'].forEach(name=>{ if(was.raw[name]!=null && lsGet(K[name])!==was.raw[name]) lsSet(K[name], was.raw[name]); });
+    proSchemaDirty.clear(); was.dirty.forEach(name=>proSchemaDirty.add(name));     /* what was waiting to be written is waiting again */
     if(crewWas){ try{ await idbReplace(crewWas); }catch(e){} }      /* the lists go back too */
     restoreRefused('I couldn\u2019t write to this phone\u2019s storage, so nothing was restored.'); return;
   }

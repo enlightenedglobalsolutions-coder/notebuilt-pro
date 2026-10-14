@@ -22,7 +22,7 @@ const ORIGIN = 'http://127.0.0.1:' + WEB;
 const URL0 = ORIGIN + '/';
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const SHOTS = process.argv.indexOf('--shots') > 0 ? path.resolve(process.argv[process.argv.indexOf('--shots') + 1]) : null;
-const ID_RE = /^[A-Za-z0-9_-]{21}[AQgw]$/;
+const ID_RE = /^[A-Za-z0-9_-]{10}[AEIMQUYcgkosw048]$/;
 const TYPES = { '.html':'text/html; charset=utf-8', '.js':'text/javascript', '.webmanifest':'application/manifest+json', '.png':'image/png', '.svg':'image/svg+xml' };
 
 const BAIL = process.argv.includes('--bail');
@@ -60,8 +60,19 @@ const HTML = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 }
 
 // ---- server + browser ---------------------------------------------------------
+// The stage 3 build, as it went live, served at /stage3/ on the same origin, so
+// it shares this build's storage the way a second tab on the phone does. It
+// still holds 128-bit IDs and reads the crew and jobs with no version gate of
+// its own; the checks that use it can go once no stage 3 build is left running.
+const STAGE3_REV = '3568279';
+const STAGE3 = (() => { const g = spawnSync('git', ['-C', ROOT, 'show', STAGE3_REV + ':index.html'], { encoding:'utf8' }); return g.status === 0 ? g.stdout : null; })();
 const srv = http.createServer((q, r) => {
   let p = decodeURIComponent(q.url.split('?')[0]); if(p === '/') p = '/index.html';
+  if(p === '/stage3/' || p === '/stage3/index.html'){
+    if(!STAGE3){ r.writeHead(404); r.end(); return; }
+    r.writeHead(200, { 'content-type':TYPES['.html'], 'cache-control':'no-store' }); r.end(STAGE3); return;
+  }
+  if(p.indexOf('/stage3/') === 0) p = p.slice(7);
   const f = path.join(ROOT, p);
   if(f.indexOf(ROOT) !== 0 || !fs.existsSync(f) || fs.statSync(f).isDirectory()){ r.writeHead(404); r.end(); return; }
   r.writeHead(200, { 'content-type':TYPES[path.extname(f)] || 'application/octet-stream', 'cache-control':'no-store' });
@@ -198,11 +209,11 @@ async function run(){
   const linkOf = share => share.text.split('\n')[1];
   const goHome = async () => { await ev('go("home")'); await until('location.hash==="#/home"', 4000, 'home'); };
   // Lists put straight into the phone's storage, the way a restore leaves them.
-  const seedLists = arr => ev(`new Promise(function(res,rej){var r=indexedDB.open('notebuiltpro',2);
+  const seedLists = arr => ev(`new Promise(function(res,rej){var r=indexedDB.open('notebuiltpro',3);
     r.onupgradeneeded=function(){var d=r.result;if(!d.objectStoreNames.contains('lists'))d.createObjectStore('lists',{keyPath:'listId'});if(!d.objectStoreNames.contains('reports'))d.createObjectStore('reports',{keyPath:['listId','workerId']})};
     r.onsuccess=function(){var d=r.result,tx=d.transaction('lists','readwrite');${JSON.stringify(arr)}.forEach(function(x){tx.objectStore('lists').put(x)});tx.oncomplete=function(){d.close();res(true)};tx.onerror=function(){rej(tx.error)}};
     r.onerror=function(){rej(r.error)}})`);
-  const nodeId = () => require('crypto').randomBytes(16).toString('base64url');
+  const nodeId = () => require('crypto').randomBytes(8).toString('base64url');
   // Deterministic text in one script: the same fixtures on every run.
   let _seed = 0x2545F491;
   const rnd = () => { _seed |= 0; _seed = _seed + 0x6D2B79F5 | 0; let t = Math.imul(_seed ^ _seed >>> 15, 1 | _seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
@@ -244,7 +255,7 @@ async function run(){
   ok(!(await overflow()), 'the warning does not widen the page', await overflow());
   await type('#boss-name', 'Mike'); await until('document.getElementById("name-msg").textContent===""', 4000, 'warning cleared');
   ok(true, 'shortening the name clears the warning');
-  // Reported, not asserted: 40 Cyrillic characters sit within a few characters of the line.
+  // Reported, not asserted: 40 Cyrillic characters sit near the line. With 128-bit ids this read "tight"; at 64 it reads "ok".
   { const r = await ev('nameCheck(' + q(CYR) + ').then(function(r){return r.level})'); console.log('       40 Cyrillic characters measure as: ' + r); }
   // The stronger level needs the other two names; they are passed in once the app knows them.
   { let s = 0x9e3779b9; const r32 = () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
@@ -269,7 +280,7 @@ async function run(){
   const S1 = await raw('notebuiltpro.settings'), s1 = JSON.parse(S1);
   ok(ID_RE.test(s1.boss.id), 'first run minted a permanent ID', S1);
   ok(s1.boss.name === 'Mike', 'and took the name, trimmed', s1.boss.name);
-  ok(s1.schemaVersion === 3 && Object.keys(s1).join() === 'schemaVersion,boss' && Object.keys(s1.boss).join() === 'id,name', 'the save stamped schema 3, in a fixed key order', S1);
+  ok(s1.schemaVersion === 4 && Object.keys(s1).join() === 'schemaVersion,boss' && Object.keys(s1.boss).join() === 'id,name', 'the save stamped schema 4, in a fixed key order', S1);
   ok((await text('.ver-stamp')) === VERSION && /Mike/.test(await text('#app')), 'Home shows the name and the stamp');
   ok((await ev('location.hash')) === '#/home' && (await ev('history.state.d')) === 1, 'history is seeded: guard, then Home');
   ok(!(await overflow()), 'Home: no horizontal scroll at 320px', await overflow());
@@ -298,7 +309,7 @@ async function run(){
   await click('[data-action="edit-name"]'); await type('#edit-name', 'Mike S'); await click('[data-action="name-save"]');
   await until('localStorage.getItem("notebuiltpro.settings").indexOf("Mike S")>0', 5000, 'rename saved');
   const S2 = JSON.parse(await raw('notebuiltpro.settings'));
-  ok(S2.schemaVersion === 3, 'the first ordinary save stamps it');
+  ok(S2.schemaVersion === 4, 'the first ordinary save stamps it');
   ok(S2.boss.id === s1.boss.id && S2.boss.name === 'Mike S', 'renaming keeps the ID', JSON.stringify(S2));
   ok((await raw('notebuiltpro.settings__bak')) === UNSTAMPED, 'the save backed up what was there first');
   ok((await raw('notebuiltpro.selfcheck.marker')) === null, 'the harness key is dropped by that save');
@@ -311,19 +322,20 @@ async function run(){
   ok((await snap()) === JSON.stringify([['notebuiltpro.settings', V1]]) && /Mike/.test(await text('#app')), 'a phone on schema 1 opens as it was, and startup does not move it up');
   await click('[data-go="crew"]'); await addRec('Joe');
   { const st = JSON.parse(await raw('notebuiltpro.settings')), ro = await stored('roster');
-    ok(ro.length === 1 && st.schemaVersion === 3 && st.boss.id === s1.boss.id, 'adding the first worker writes the crew and, with it, stamps schema 3', JSON.stringify(st));
+    ok(ro.length === 1 && st.schemaVersion === 4 && st.boss.id === s1.boss.id, 'adding the first worker writes the crew and, with it, stamps schema 4', JSON.stringify(st));
     ok((await raw('notebuiltpro.settings__bak')) === V1, 'and the schema 1 settings are kept as the backup copy'); }
   await seed([['notebuiltpro.settings', JSON.stringify(S2)]]); await load('#/settings'); await sleep(200);
 
   // ---- rename with a long name ---------------------------------------------------
   section('Settings: your name');
-  await click('[data-action="edit-name"]'); await type('#edit-name', CYR);
+  // 40 Chinese characters: since ids went to 64 bits, 40 Cyrillic ones leave room for a full task and no longer warn.
+  await click('[data-action="edit-name"]'); await type('#edit-name', HAN);
   await until('document.getElementById("edit-name-msg").className.indexOf("warn")>=0', 5000, 'rename warning');
   ok(true, 'the Settings row runs the same check, while typing');
   ok(!(await overflow()), 'name sheet: no horizontal scroll at 320px', await overflow());
   await shot('04-rename-sheet-320');
   await click('[data-action="name-save"]');
-  await until('localStorage.getItem("notebuiltpro.settings").indexOf("Рождественский")>0', 5000, 'long name saved');
+  await until('localStorage.getItem("notebuiltpro.settings").indexOf("项目经理")>0', 5000, 'long name saved');
   await until('document.getElementById("set-name-msg") && document.getElementById("set-name-msg").textContent.length>20', 5000, 'standing warning in Settings');
   ok(JSON.parse(await raw('notebuiltpro.settings')).boss.id === s1.boss.id, 'a warned name still saves, and still keeps the ID');
   ok(!(await overflow()), 'Settings with a 40-character name: no horizontal scroll', await overflow());
@@ -471,7 +483,7 @@ async function run(){
   ok((await text('#home-jobs')) === '2 jobs' && (await text('#home-crew')) === '6 people', 'Home counts both', (await text('#home-jobs')) + ' / ' + (await text('#home-crew')));
   ok(!(await overflow()), 'Home with crew and jobs: no horizontal scroll at 320px', await overflow());
   await shot('07-home-stage2-320');
-  ok(JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 3 && JSON.parse(await snap()).every(p => p[0].indexOf('notebuiltpro.') === 0), 'every key is still notebuiltpro.*');
+  ok(JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 4 && JSON.parse(await snap()).every(p => p[0].indexOf('notebuiltpro.') === 0), 'every key is still notebuiltpro.*');
 
   // A boss rename is now weighed against the real crew and jobs.
   await click('[data-go="settings"]'); await click('[data-action="edit-name"]'); await type('#edit-name', CYR);
@@ -613,7 +625,7 @@ async function run(){
     await click('[data-go="settings"]'); await click('[data-go="support"]');
     await pickFile('.wrap input[data-import]', tmpFile('stage1.json', JSON.stringify(old)));
     await until('localStorage.getItem("notebuiltpro.roster")==="[]"', 6000, 'stage 1 backup restored');
-    ok(/Mike, 0 on the crew, 0 jobs/.test(dialogs.seen[0]) && JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 3 && (await raw('notebuiltpro.roster__bak')) === AR, 'a stage 1 backup restores, says it holds no crew, comes up to schema 3, and the replaced crew is kept as the backup copy');
+    ok(/Mike, 0 on the crew, 0 jobs/.test(dialogs.seen[0]) && JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 4 && (await raw('notebuiltpro.roster__bak')) === AR, 'a stage 1 backup restores, says it holds no crew, comes up to schema 4, and the replaced crew is kept as the backup copy');
     await click('[data-go="settings"]'); await click('[data-go="support"]');
     await pickFile('.wrap input[data-import]', path.join(work, 'first.json'));
     await until('localStorage.getItem("notebuiltpro.roster")===' + q(AR), 6000, 'full backup restored again'); }
@@ -646,7 +658,7 @@ async function run(){
     ['a worker that is not a record', (() => { const g = good(); g.roster[0] = 'Joe'; return JSON.stringify(g); })()],
     ['a roster that is not a list', (() => { const g = good(); g.roster = { 0:g.roster[0] }; return JSON.stringify(g); })()],
     ['1,001 workers, each one valid', (() => { const g = good(); const w = g.roster[0]; g.roster = Array.from({ length:1001 }, () => Object.assign({}, w, { id:require('crypto').randomBytes(16).toString('base64url') })); return JSON.stringify(g); })()],
-    ['a job with a malformed ID', (() => { const g = good(); g.jobs[0].id = 'B'.repeat(22);   /* right length, but not a canonical ID: the last character can only be A, Q, g or w */ return JSON.stringify(g); })()],
+    ['a job with a malformed ID', (() => { const g = good(); g.jobs[0].id = 'B'.repeat(11);   /* right length, but not a canonical ID: the last character carries four bits, so it is one of sixteen, and B is not one */ return JSON.stringify(g); })()],
     ['two jobs with one ID', (() => { const g = good(); g.jobs[1].id = g.jobs[0].id; return JSON.stringify(g); })()],
     ['markup in a job name', (() => { const g = good(); g.jobs[0].name = 'Oak <img src=x onerror="window.__y=1">'; return JSON.stringify(g); })()],
     ['a 161-character address', (() => { const g = good(); g.jobs[0].address = 'a'.repeat(161); return JSON.stringify(g); })()],
@@ -803,7 +815,7 @@ async function run(){
     await load(DAYR); await listsReady(); await until('document.querySelectorAll("#day-body .task").length===6', 5000, 'day on a schema 2 phone'); await sleep(200);
     ok(JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 2, 'a phone on schema 2 opens its day without being moved up');
     await addTask('Joe', 'One more');
-    ok(JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 3 && JSON.parse(await raw('notebuiltpro.settings__bak')).schemaVersion === 2, 'the first list write stamps schema 3, after the list is down, and keeps the old settings as the backup copy'); }
+    ok(JSON.parse(await raw('notebuiltpro.settings')).schemaVersion === 4 && JSON.parse(await raw('notebuiltpro.settings__bak')).schemaVersion === 2, 'the first list write stamps schema 4, after the list is down, and keeps the old settings as the backup copy'); }
 
   // ---- send ---------------------------------------------------------------------------------
   section('Send');
@@ -1060,7 +1072,7 @@ async function run(){
   had = fs.readdirSync(work); await click('[data-action="export"]');
   const FL = await download(had), TL = fs.readFileSync(path.join(work, FL), 'utf8'), BL = JSON.parse(TL); fs.renameSync(path.join(work, FL), path.join(work, 'lists.json'));
   const noQueue = ls => JSON.stringify(ls.map(l => Object.assign({}, l, { queue:{} })).sort((x, y) => x.listId < y.listId ? -1 : 1));
-  ok(BL.settings.schemaVersion === 3 && BL.crew.lists.length === 2 && noQueue(BL.crew.lists) === noQueue(LB) && BL.crew.lists.every(l => JSON.stringify(l.queue) === '{}'), 'the backup carries both lists as stored, sent map included, and leaves the unfinished send behind');
+  ok(BL.settings.schemaVersion === 4 && BL.crew.lists.length === 2 && noQueue(BL.crew.lists) === noQueue(LB) && BL.crew.lists.every(l => JSON.stringify(l.queue) === '{}'), 'the backup carries both lists as stored, sent map included, and leaves the unfinished send behind');
   ok(TL.indexOf('#crew=') < 0, 'so no list link is written into the file');
   await wipe(); await load(); dialogs.seen.length = 0;
   await pickFile('.setup input[data-import]', path.join(work, 'lists.json'));
@@ -1099,7 +1111,7 @@ async function run(){
   await load('#/support'); await listsReady();
   { const gl = () => JSON.parse(TL), first = g => g.crew.lists.find(l => l.day === today);
     const badLists = [
-      ['a list with a malformed ID', g => { first(g).listId = 'B'.repeat(22); }],
+      ['a list with a malformed ID', g => { first(g).listId = 'B'.repeat(11); }],
       ['a list that is not a record', g => { g.crew.lists[0] = 'list'; }],
       ['markup in a task', g => { first(g).tasks[0].text = '<img src=x onerror="window.__y=1">'; }],
       ['a 201-character task', g => { first(g).tasks[0].text = 'x'.repeat(201); }],
@@ -1257,12 +1269,12 @@ async function run(){
   section('IndexedDB');
   const layout = () => ev(`new Promise(function(res){var r=indexedDB.open('notebuiltpro');r.onsuccess=function(){var d=r.result,o={v:d.version,stores:Array.prototype.slice.call(d.objectStoreNames)};
     var tx=d.transaction(o.stores,'readonly');o.lists=tx.objectStore('lists').keyPath;o.reports=tx.objectStore('reports').keyPath;var c=tx.objectStore('reports').count();c.onsuccess=function(){o.n=c.result;d.close();res(JSON.stringify(o))}}})`);
-  ok((await layout()) === '{"v":2,"stores":["lists","reports"],"lists":"listId","reports":["listId","workerId"],"n":0}', 'lists are keyed by listId; reports by listId and workerId together, one record per worker per list', await layout());
+  ok((await layout()) === '{"v":3,"stores":["lists","reports"],"lists":"listId","reports":["listId","workerId"],"n":0}', 'lists are keyed by listId; reports by listId and workerId together, one record per worker per list', await layout());
   const oldDb = withRecord => ev(`new Promise(function(res,rej){var r=indexedDB.open('notebuiltpro',1);r.onupgradeneeded=function(){r.result.createObjectStore('lists',{keyPath:'listId'});var s=r.result.createObjectStore('reports',{keyPath:'listId'});${withRecord ? "s.put({listId:'L1',kept:true});" : ''}};r.onsuccess=function(){r.result.close();res(true)};r.onerror=function(){rej(r.error)}})`);
   const KEEPS = await raw('notebuiltpro.settings');
   const oldPhone = async withRecord => { await wipe(); await seed([['notebuiltpro.settings', KEEPS], ['notebuiltpro.installPromptDismissed', '1']]); await oldDb(withRecord); await load('#/support'); };
   await oldPhone(false); await listsReady();
-  ok(/"reports":\["listId","workerId"\],"n":0/.test(await layout()) && /"v":2/.test(await layout()), 'a stage 1 database, with its empty reports store, is re-keyed the first time the lists are read', await layout());
+  ok(/"reports":\["listId","workerId"\],"n":0/.test(await layout()) && /"v":3/.test(await layout()), 'a stage 1 database, with its empty reports store, is re-keyed the first time the lists are read', await layout());
   { const had2 = fs.readdirSync(work); await click('[data-action="export"]'); const f = await download(had2); fs.renameSync(path.join(work, f), path.join(work, 'upgraded.json'));
     ok(true, 'and a backup can be made from it'); }
   await oldPhone(true); await until('listsState==="failed"', 8000, 'lists not opened');
@@ -1271,6 +1283,203 @@ async function run(){
     ok(backups().length === 0 && kept === '{"v":1,"rec":{"listId":"L1","kept":true}}', 'if that old store somehow holds a record, the upgrade stops: nothing is dropped and no backup is written without it', kept + ' ' + await text('#toast'));
     await load('#/day'); await until('listsState==="failed"', 8000, 'lists not opened');
     ok(/couldn\u2019t open the storage this phone keeps lists in/.test(await text('#app')) && await ev('!document.getElementById("day-jobs")'), 'and Days says it could not open the lists, and offers nothing to build on', await text('#app')); }
+
+  // ---- a phone holding 128-bit IDs (schema 3 -> 4, IndexedDB 2 -> 3) ------------------------------
+  section('Shorter IDs: a phone that holds 128-bit ones');
+  { const crypto = require('crypto');
+    const longId = () => crypto.randomBytes(16).toString('base64url');
+    // The short form, worked out here from the bytes and not with the app's own function.
+    const short = id => Buffer.from(id, 'base64url').subarray(0, 8).toString('base64url');
+    const LONG_RUN = /[A-Za-z0-9_-]{22}/;
+    const O = { boss:longId(), joe:longId(), maria:longId(), sam:longId(), oak:longId(), elm:longId(), list:longId() };
+    const rec = (id, name, extra, archived) => Object.assign({ id, name }, extra, { archived:!!archived, createdAt:NOW - 5000, updatedAt:NOW - 5000 });
+    const SET3 = JSON.stringify({ schemaVersion:3, boss:{ id:O.boss, name:'Mike' } });
+    const ROS3 = JSON.stringify([rec(O.joe, 'Joe', { note:'Framing' }), rec(O.maria, 'Maria', { note:'' }), rec(O.sam, 'Sam', { note:'' }, true)]);
+    const JOB3 = JSON.stringify([rec(O.oak, 'Oak St reno', { address:'12 Oak St' }), rec(O.elm, 'Elm Ave', { address:'' })]);
+    const LIST3 = { listId:O.list, createdAt:NOW - 4000, updatedAt:NOW - 3000, boss:{ id:O.boss, name:'Mike' }, job:{ id:O.oak, name:'Oak St reno' }, day:today,
+      workers:[{ id:O.joe, name:'Joe' }, { id:O.maria, name:'Maria' }].sort((a, b) => a.id < b.id ? -1 : 1),
+      tasks:[{ id:'1', worker:O.joe, text:'Hang 6 doors, unit 204', order:1, editedAt:NOW - 4000, gone:null },
+             { id:'2', worker:O.maria, text:'Base trim, hallway', order:2, editedAt:NOW - 4000, gone:null },
+             { id:'3', worker:O.joe, text:'Haul drywall scrap', order:3, editedAt:NOW - 3500, gone:'cancelled' }],
+      sent:{ [O.joe]:{ at:NOW - 3900, ids:['1', '3'] } },
+      queue:{ [O.maria]:{ sendId:'N4xvgQX-', at:NOW - 3000, parts:[{ link:'https://notebuilt.ca/#crew=1AAAA', ids:['2'], done:false }] } } };
+    ok(Object.values(O).every(x => /^[A-Za-z0-9_-]{21}[AQgw]$/.test(x)) && Object.values(O).every(x => ID_RE.test(short(x)) && x.indexOf(short(x).slice(0, 10)) === 0), 'fixtures: seven 128-bit IDs, and the 64-bit form of each');
+    // The database as the stage 3 build left it: version 2, lists under their long listIds.
+    const stage3Db = arr => ev(`new Promise(function(res,rej){var r=indexedDB.open('notebuiltpro',2);
+      r.onupgradeneeded=function(){var d=r.result;d.createObjectStore('lists',{keyPath:'listId'});d.createObjectStore('reports',{keyPath:['listId','workerId']})};
+      r.onsuccess=function(){var d=r.result,tx=d.transaction('lists','readwrite');${JSON.stringify(arr)}.forEach(function(x){tx.objectStore('lists').put(x)});tx.oncomplete=function(){d.close();res(true)};tx.onerror=function(){rej(tx.error)}};
+      r.onerror=function(){rej(r.error)}})`);
+    const rawDb = () => ev(`new Promise(function(res){var r=indexedDB.open('notebuiltpro');r.onsuccess=function(){var d=r.result,g=d.transaction('lists').objectStore('lists').getAllKeys();g.onsuccess=function(){var o={v:d.version,keys:g.result};d.close();res(JSON.stringify(o))}}})`).then(JSON.parse);
+    const PAIRS = [['notebuiltpro.settings', SET3], ['notebuiltpro.roster', ROS3], ['notebuiltpro.jobs', JOB3], ['notebuiltpro.installPromptDismissed', '1']];
+    const stage3 = async (lists, pairs) => { await wipe(); await seed(pairs || PAIRS); await stage3Db(lists); };
+    const mem = () => ev('JSON.stringify({b:[settings.boss.id,settings.boss.name],r:roster.map(function(w){return [w.id,w.name,w.note,w.archived,w.createdAt]}),j:jobs.map(function(x){return [x.id,x.name,x.address,x.archived,x.createdAt]}),u:unreadable.size})').then(JSON.parse);
+    const WANT = { b:[short(O.boss), 'Mike'], r:[[short(O.joe), 'Joe', 'Framing', false, NOW - 5000], [short(O.maria), 'Maria', '', false, NOW - 5000], [short(O.sam), 'Sam', '', true, NOW - 5000]],
+                   j:[[short(O.oak), 'Oak St reno', '12 Oak St', false, NOW - 5000], [short(O.elm), 'Elm Ave', '', false, NOW - 5000]], u:0 };
+    const DAY4 = '#/day/' + short(O.oak) + '/' + today, SEND4 = '#/send/' + short(O.oak) + '/' + today;
+
+    await stage3([LIST3]); const SEEDED = await snap(); await load('#/home');
+    ok(await ev('!!document.querySelector(".topbar")') && /Mike/.test(await text('#app')) && !/can’t read/.test(await text('#app')), 'a stage 3 phone opens on Home under its name: no damaged gate, no first run');
+    ok(JSON.stringify(await mem()) === JSON.stringify(WANT), 'the boss, three workers (one archived) and two jobs are all there, each under the first 64 bits of its old ID', JSON.stringify(await mem()));
+    ok((await snap()) === SEEDED, 'startup wrote nothing: the phone’s storage is byte-identical until something is saved');
+    await load('#/crew'); await sleep(200);
+    ok(/Joe/.test(await text('#app')) && /Maria/.test(await text('#app')) && await ev('!!document.querySelector("[data-action=rec-add]")'), 'Crew draws them and offers to add another');
+    await load('#/day/' + O.oak + '/' + today); await sleep(200);
+    ok((await ev('location.hash')) === '#/home', 'a route still spelled with the long job ID is not a route: Home');
+    await load(DAY4); await listsReady(); await until('document.querySelectorAll("#day-body .task").length>=2', 5000, 'the migrated day');
+    { const D = await dump(), L = D[0] || {}, db = await rawDb();
+      ok(db.v === 3 && db.keys.length === 1 && db.keys[0] === short(O.list), 'the database is at version 3 and the list sits under its short listId alone', JSON.stringify(db));
+      ok(D.length === 1 && L.boss.id === short(O.boss) && L.job.id === short(O.oak) && L.day === today && L.createdAt === NOW - 4000 && L.workers.map(w => w.id + w.name).sort().join() === [short(O.joe) + 'Joe', short(O.maria) + 'Maria'].sort().join(),
+        'the list kept its boss, job, day and both workers', JSON.stringify(L));
+      ok(JSON.stringify(L.tasks.map(t => [t.id, t.worker, t.text, t.order, t.editedAt, t.gone])) === JSON.stringify(LIST3.tasks.map(t => [t.id, short(t.worker), t.text, t.order, t.editedAt, t.gone])),
+        'every task is intact and still belongs to the same person, the cancelled one included');
+      ok(JSON.stringify(L.sent) === JSON.stringify({ [short(O.joe)]:{ at:NOW - 3900, ids:['1', '3'] } }), 'what Joe had been given is still on record under his short ID', JSON.stringify(L.sent));
+      ok(JSON.stringify(L.queue) === '{}', 'the half-finished send is gone: its links were made in the old format');
+      ok(!LONG_RUN.test(JSON.stringify(D)), 'no 128-bit ID is left anywhere in the stored list'); }
+    ok(/Hang 6 doors/.test(await text('#day-body')) && /Base trim/.test(await text('#day-body')), 'the day draws its tasks');
+    ok((await snap()) === SEEDED, 'reading the lists moved the database up and still wrote nothing to localStorage');
+
+    // Usable: the first change writes everything down in the new shape, data before the number.
+    await addTask('Maria', 'Shim frames, unit 205');
+    await until('JSON.parse(localStorage.getItem("notebuiltpro.settings")).schemaVersion===4', 5000, 'schema 4 stamped');
+    { const st = await stored('settings'), ro = await stored('roster'), jo = await stored('jobs');
+      ok(st.boss.id === short(O.boss) && st.boss.name === 'Mike' && JSON.stringify(ro) === ROS3.split(O.joe).join(short(O.joe)).split(O.maria).join(short(O.maria)).split(O.sam).join(short(O.sam))
+         && JSON.stringify(jo) === JOB3.split(O.oak).join(short(O.oak)).split(O.elm).join(short(O.elm)),
+        'the first task added stamps schema 4, and the crew and the jobs went down with short IDs and nothing else changed', JSON.stringify([st, ro, jo]));
+      ok((await raw('notebuiltpro.settings__bak')) === SET3 && (await raw('notebuiltpro.roster__bak')) === ROS3 && (await raw('notebuiltpro.jobs__bak')) === JOB3, 'what was there before is kept, byte for byte, as each key’s backup copy');
+      ok((await dump())[0].tasks.length === 4 && (await dump())[0].tasks[3].worker === short(O.maria), 'and the new task joined the migrated list'); }
+    await load(SEND4); await listsReady(); await hookShare(); await measured(); await ev('window.__shares=[],true');
+    await sendAll();
+    { const got = []; for(const sh of await shares()) got.push(await decode(linkOf(sh)));
+      const by = n => (got.find(r => r.ok && r.value.workers[0].name === n) || {}).value;
+      const joe = by('Joe'), maria = by('Maria');
+      ok(got.length === 2 && got.every(r => r.ok && r.value.v === 3 && r.value.listId === short(O.list) && r.value.boss.id === short(O.boss) && r.value.job.id === short(O.oak)) && !LONG_RUN.test(JSON.stringify(got.map(r => [r.value.listId, r.value.boss.id, r.value.job.id, r.value.workers]))),
+        'the migrated list sends: both links decode as version 3 and carry only short IDs', JSON.stringify(got).slice(0, 400));
+      ok(!!joe && !!maria && joe.workers[0].id === short(O.joe) && maria.workers[0].id === short(O.maria) && maria.tasks.map(t => t.text).join('|') === 'Base trim, hallway|Shim frames, unit 205',
+        'each person’s link is theirs, under their short ID');
+      ok(!!joe && joe.tasks.some(t => t.id === '3' && t.gone === 'cancelled'), 'Joe’s link still carries the tombstone for the task cancelled before the change, because what he was given survived'); }
+    await load('#/crew'); await sleep(200);
+    { const m = await mem(); ok(JSON.stringify(m) === JSON.stringify(WANT) && /Joe/.test(await text('#app')), 'a cold open after the change reads the short IDs straight from storage', JSON.stringify(m)); }
+    { await load('#/support'); await listsReady(); const hadM = fs.readdirSync(work); await click('[data-action="export"]'); const f = await download(hadM);
+      const b = JSON.parse(fs.readFileSync(path.join(work, f), 'utf8')); fs.renameSync(path.join(work, f), path.join(work, 'migrated.json'));
+      ok(b.settings.schemaVersion === 4 && b.settings.boss.id === short(O.boss) && b.roster.length === 3 && b.jobs.length === 2 && b.crew.lists.length === 1 && b.crew.lists[0].listId === short(O.list)
+         && !LONG_RUN.test(JSON.stringify([b.settings.boss.id, b.roster.map(r => r.id), b.jobs.map(j => j.id), b.crew.lists.map(l => [l.listId, l.boss.id, l.job.id, l.workers, Object.keys(l.sent), l.tasks.map(t => t.worker)])])),
+        'a backup made now says schema 4 and holds only short IDs'); }
+
+    // A stage 3 phone whose first save is to the crew: the jobs still go down before the number.
+    await stage3([LIST3]); await load('#/crew'); await sleep(200); await addRec('Dev', 'Trim');
+    await until('JSON.parse(localStorage.getItem("notebuiltpro.settings")).schemaVersion===4', 5000, 'schema 4 stamped by a crew save');
+    { const ro = await stored('roster'), jo = await stored('jobs');
+      ok(ro.length === 4 && ro.slice(0, 3).map(r => r.id).join() === [O.joe, O.maria, O.sam].map(short).join() && ID_RE.test(ro[3].id) && jo.map(j => j.id).join() === [O.oak, O.elm].map(short).join(),
+        'adding a worker first: the crew and the jobs are both written short before schema 4 is stamped', JSON.stringify([ro, jo]));
+      ok((await raw('notebuiltpro.roster__bak')) === ROS3 && (await raw('notebuiltpro.jobs__bak')) === JOB3, 'each written once: the backup copies are still the long-ID originals'); }
+
+    // A backup made by the stage 3 build restores the same way, onto a clean phone.
+    const B3 = { app:'notebuilt-pro', kind:'backup', version:1, exportedAt:new Date().toISOString(), appVersion:'2026.10.12-1648',
+                 settings:JSON.parse(SET3), roster:JSON.parse(ROS3), jobs:JSON.parse(JOB3), crew:{ lists:[Object.assign({}, LIST3, { queue:{} })], reports:[] } };
+    fs.writeFileSync(path.join(work, 'long-ids.json'), JSON.stringify(B3));
+    await wipe(); await load(); dialogs.answer = true;
+    await pickFile('.setup input[data-import]', path.join(work, 'long-ids.json')); await until('!!document.querySelector(".topbar")', 8000, 'old backup restored'); await listsReady();
+    { const m = await mem(), D = await dump(), st = await stored('settings');
+      ok(JSON.stringify(m) === JSON.stringify(WANT) && st.schemaVersion === 4 && st.boss.id === short(O.boss), 'a backup holding 128-bit IDs restores: same people and jobs, short IDs, schema 4', JSON.stringify(m));
+      ok(D.length === 1 && D[0].listId === short(O.list) && D[0].tasks.length === 3 && Object.keys(D[0].sent).join() === short(O.joe) && !LONG_RUN.test(JSON.stringify(D)) && !LONG_RUN.test((await raw('notebuiltpro.roster')) + (await raw('notebuiltpro.jobs'))),
+        'and its list, with what was sent, lands under the same short IDs the phone itself would have reached'); }
+    // One shape. Where the number says the IDs are short, a long one is a bad ID and nothing more.
+    fs.writeFileSync(path.join(work, 'long-ids-v4.json'), JSON.stringify(Object.assign({}, B3, { settings:{ schemaVersion:4, boss:B3.settings.boss } })));
+    await wipe(); await load();
+    await pickFile('.setup input[data-import]', path.join(work, 'long-ids-v4.json'));
+    await until('/Not restored/.test(document.getElementById("sheet-root").textContent)', 6000, 'refusal of long IDs under schema 4');
+    ok((await snap()) === '[]' && await ev('!!document.getElementById("boss-name")'), 'the same file claiming schema 4 is refused whole: a long ID gets no second reading there');
+    const SET4 = JSON.stringify({ schemaVersion:4, boss:{ id:short(O.boss), name:'Mike' } });
+    const noLongIn = async keys => { for(const k of keys){ if(LONG_RUN.test(String(await raw('notebuiltpro.' + k)))) return false; } return true; };
+    const nothingRefused = async () => (await ev('gate()===null && unreadable.size===0')) && !/can’t read/.test(await text('#app'));
+
+    // Interrupted mid-migration: the first save writes the number, then the crew, and then the jobs will not go down
+    // (storage full). The app is then closed. Next open: nothing refused, and one save finishes it.
+    await stage3([LIST3]); await load('#/crew'); await sleep(200);
+    await ev('(function(){var s=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k==="notebuiltpro.jobs")throw new Error("QuotaExceededError");return s.apply(this,arguments)};return true})()');
+    await addRec('Dev', 'Trim'); await sleep(200);
+    { const st = await stored('settings'), ro = await stored('roster');
+      ok(st.schemaVersion === 4 && (await raw('notebuiltpro.jobs')) === JOB3 && ro.length === 4 && await noLongIn(['settings', 'roster']),
+        'interrupted: the number went down, then the crew, and the jobs would not', JSON.stringify([st, ro.length])); }
+    const HALF = await snap();
+    await load('#/jobs'); await sleep(300);
+    { const m = await mem();
+      ok(await nothingRefused() && JSON.stringify(m.r.slice(0, 3)) === JSON.stringify(WANT.r) && m.r[3][1] === 'Dev' && JSON.stringify(m.j) === JSON.stringify(WANT.j),
+        'the next open refuses nothing: crew (Dev included) and jobs all there under short IDs', JSON.stringify(m));
+      ok((await snap()) === HALF, 'and that open wrote nothing'); }
+    await addRec('Pine Rd', ''); await sleep(200);
+    { const st = await stored('settings'), ro = await stored('roster'), jo = await stored('jobs');
+      ok(st.schemaVersion === 4 && ro.length === 4 && jo.length === 3 && jo.slice(0, 2).map(j => j.id).join() === [O.oak, O.elm].map(short).join() && await noLongIn(['settings', 'roster', 'jobs']),
+        'one ordinary save finishes it: the jobs go down short too', JSON.stringify([st, jo])); }
+    await load('#/crew'); await sleep(300);
+    ok(await nothingRefused() && (await mem()).r.length === 4 && /Dev/.test(await text('#app')), 'and a cold open after that reads it all straight back');
+
+    // Interrupted after the number: schema 4 is on the phone, but a stage 3 build still open in another tab saved the crew
+    // twice since (it never writes settings for a crew save), and the jobs are still long. Nothing may be refused.
+    const ROS3X = JSON.stringify(JSON.parse(ROS3).concat([rec(O.list, 'Kim', { note:'added in the old tab' })]));
+    await wipe(); await seed([['notebuiltpro.settings', SET4], ['notebuiltpro.roster', ROS3X], ['notebuiltpro.roster__bak', ROS3], ['notebuiltpro.jobs', JOB3], ['notebuiltpro.installPromptDismissed', '1']]);
+    const AFTER = await snap();
+    await load('#/crew'); await sleep(300);
+    { const m = await mem();
+      ok(await nothingRefused() && JSON.stringify(m.r.slice(0, 3)) === JSON.stringify(WANT.r) && JSON.stringify(m.r[3].slice(0, 2)) === JSON.stringify([short(O.list), 'Kim']) && JSON.stringify(m.j) === JSON.stringify(WANT.j),
+        'a schema 4 phone whose crew and jobs still hold long IDs opens with nothing refused, the old tab’s new worker included', JSON.stringify(m));
+      ok((await snap()) === AFTER, 'and that open wrote nothing'); }
+    await addRec('Lee', ''); await sleep(200);
+    { const ro = await stored('roster'), jo = await stored('jobs');
+      ok(ro.length === 5 && jo.length === 2 && (await stored('settings')).schemaVersion === 4 && await noLongIn(['settings', 'roster', 'jobs']),
+        'the next save writes the crew and the jobs short, though the number already said 4', JSON.stringify([ro.map(r => r.id), jo.map(j => j.id)])); }
+
+    await wipe(); await seed([['notebuiltpro.settings', JSON.stringify({ schemaVersion:4, boss:{ id:O.boss, name:'Mike' } })], ['notebuiltpro.installPromptDismissed', '1']]); await load(); await sleep(300);
+    ok(await ev('gate()==="damaged"') && await ev('!document.getElementById("boss-name")'), 'schema 4 settings holding a long boss ID are damaged, not quietly shortened: the number and that ID are one write, so they cannot have come apart', await ev('String(gate())'));
+    await wipe(); await seed([['notebuiltpro.settings', SET4], ['notebuiltpro.roster', '{'], ['notebuiltpro.roster__bak', ROS3], ['notebuiltpro.installPromptDismissed', '1']]); await load('#/crew'); await sleep(300);
+    { const m = await mem(); ok(JSON.stringify(m.r) === JSON.stringify(WANT.r) && m.u === 0, 'the backup copy left by the change still heals a damaged crew: it is read as the older copy it is', JSON.stringify(m)); }
+
+    // The stage 3 build reads the crew and jobs with no gate but the schema number, and refuses a 64-bit ID.
+    // So no state this build leaves on a phone may hold a short crew or job ID under a number below 4.
+    // Each case opens the real stage 3 build on what this one left, and it must stop at its newer-version
+    // screen and write nothing, or find nothing short to read.
+    if(!STAGE3) console.log('  SKIP stage 3 build not in git: the old-tab checks not run');
+    else {
+      const old3 = async () => { await blank(); await send('Page.navigate', { url:URL0 + 'stage3/' }); await sleep(80); await ready(); };
+      const refuseWrite = key => ev('(function(){var s=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k===' + q(key) + ')throw new Error("QuotaExceededError");return s.apply(this,arguments)};return true})()');
+      const opensAsFuture = async label => { const before = await snap(); await old3();
+        const g = await ev('typeof gate==="function" ? String(gate()) : "none"');
+        ok(g === 'future' && /saved by a newer version/.test(await text('#app')) && (await snap()) === before, label, g + ' ' + (await text('#app')).slice(0, 80)); };
+
+      // Interrupted after the number: the jobs will not go down.
+      await stage3([LIST3]); await load('#/crew'); await sleep(200); await refuseWrite('notebuiltpro.jobs');
+      await addRec('Dev', 'Trim'); await sleep(200);
+      ok((await stored('settings')).schemaVersion === 4 && (await stored('roster')).length === 4 && (await raw('notebuiltpro.jobs')) === JOB3,
+        'storage refuses the jobs: the number went down first, then the crew, and the jobs are still long');
+      await opensAsFuture('the stage 3 build opened on that phone stops at its newer-version screen and writes nothing');
+      // Interrupted before anything: the number will not go down, so neither does the crew.
+      await stage3([LIST3]); await load('#/crew'); await sleep(200); await refuseWrite('notebuiltpro.settings');
+      await click('[data-action="rec-add"]'); await type('#rec-name', 'Dev'); await click('[data-action="rec-save"]'); await sleep(300);
+      ok((await raw('notebuiltpro.settings')) === SET3 && (await raw('notebuiltpro.roster')) === ROS3 && (await raw('notebuiltpro.roster__bak')) === null && (await raw('notebuiltpro.jobs')) === JOB3,
+        'storage refuses settings: the crew save is refused before anything is written, and the phone is still a whole stage 3 phone');
+      ok(!!(await ev('document.getElementById("rec-name")')) && /couldn’t save/i.test((await text('#sheet-root')) || ''), 'and the sheet stays open saying it could not save', (await text('#sheet-root') || '').slice(0, 120));
+      { const before = await snap(); await old3();
+        ok(await ev('gate()===null && unreadable.size===0 && roster.length===3 && jobs.length===2') && (await snap()) === before, 'so the stage 3 build opens it as its own, all of it readable'); }
+      // The same through the other door: the first change is a task, whose save stamps the number and then writes the
+      // crew and the jobs. Settings refused: the crew and the jobs must not have gone down short either.
+      await stage3([LIST3]); await load(DAY4); await listsReady(); await until('document.querySelectorAll("#day-body .task").length>=2', 5000, 'the migrated day');
+      await refuseWrite('notebuiltpro.settings'); await addTask('Maria', 'Shim frames, unit 205'); await sleep(300);
+      ok((await raw('notebuiltpro.settings')) === SET3 && (await raw('notebuiltpro.roster')) === ROS3 && (await raw('notebuiltpro.jobs')) === JOB3,
+        'a task saved while settings are refused leaves the crew and the jobs in the old shape under the old number');
+      { const before = await snap(); await old3();
+        ok(await ev('gate()===null && unreadable.size===0 && roster.length===3 && jobs.length===2') && (await snap()) === before, 'and the stage 3 build reads its crew and jobs, writing nothing'); }
+      // Done: an ordinary migration, finished.
+      await stage3([LIST3]); await load('#/crew'); await sleep(200); await addRec('Dev', 'Trim');
+      await opensAsFuture('after a whole migration the stage 3 build stops at its newer-version screen and writes nothing');
+    }
+
+    // Fail closed: two lists whose long listIds share their first 64 bits cannot both keep their name.
+    const TWIN = Object.assign({}, LIST3, { listId:Buffer.concat([Buffer.from(O.list, 'base64url').subarray(0, 8), crypto.randomBytes(8)]).toString('base64url'), job:{ id:O.elm, name:'Elm Ave' }, queue:{} });
+    await stage3([LIST3, TWIN]); await load('#/day'); await until('listsState==="failed"', 8000, 'upgrade refused');
+    { const db = await rawDb();
+      ok(db.v === 2 && db.keys.slice().sort().join() === [O.list, TWIN.listId].sort().join(), 'if two lists would land on one short listId the upgrade stops: the database stays at version 2 with both lists as they were', JSON.stringify(db));
+      ok(/couldn’t open the storage this phone keeps lists in/.test(await text('#app')), 'and Days says it could not open the lists, rather than showing one of them'); }
+  }
 
   // ---- 320px, both themes, every screen ----------------------------------------------------------
   section('320px, dark and light');
