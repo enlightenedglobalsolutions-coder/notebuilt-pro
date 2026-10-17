@@ -847,6 +847,22 @@ async function run(){
   ok((await text('#send-next')) === 'Send Joe\u2019s list', 'the queue starts with the first worker', await text('#send-next'));
   { const M = await one(); ok(JSON.stringify(M.sent) === '{}' && JSON.stringify(M.queue) === '{}' && (await shares()).length === 0, 'measuring stored nothing and opened no share sheet'); }
   ok(!(await overflow()), 'Send: no horizontal scroll at 320px', await overflow());
+  ok((await ev('Array.prototype.every.call(document.querySelectorAll(".send-w .part"),function(p){var b=p.querySelectorAll("button.btn");return b.length===2&&b[0].dataset.action==="send-copy"&&b[0].textContent==="Copy link"&&b[1].dataset.action==="send-part"})&&document.querySelectorAll(".send-w .part").length===2')),
+    'every part row has Copy link beside Send, before anything has failed');
+  // TEMPORARY share sheet test (th_nbp_share_gesture): three payloads, inside the tap, nothing written.
+  { const b4 = JSON.stringify(await one()), link = await ev('_prep.by[' + q(sw('Joe')) + '].parts[0].link');
+    await ev('document.getElementById("probe").open=true,window.__shareMeta=[],true');
+    for(const k of ['short', 'longurl', 'text']) await tapSync('[data-action="share-probe"][data-kind="' + k + '"]');
+    await until('document.getElementById("probe-out").innerHTML.split("<br>").length===3', 4000, 'probe lines');
+    const sh = await shares(), m = JSON.parse(await ev('JSON.stringify(window.__shareMeta)'));
+    ok(sh.length === 3 && JSON.stringify(sh[0]) === JSON.stringify({ url:URL0.replace(/[^/]*$/, '') }) && JSON.stringify(sh[1]) === JSON.stringify({ url:link }) && Object.keys(sh[2]).join() === 'text' && linkOf(sh[2]) === link,
+      'the share test sends a bare short URL, the full link as a bare URL, and the full text as Send does', JSON.stringify(sh).slice(0, 300));
+    ok(m.length === 3 && m.every(x => x.sync), 'each share-test payload is shared synchronously inside the tap', JSON.stringify(m));
+    ok(/Short URL only \(\d+ chars, canShare [^)]+\): resolved after \d+ ms/.test(await text('#probe-out')), 'and each result is written on screen, with its length and time', await text('#probe-out'));
+    await ev('window.__shareFail="NotAllowedError",true'); await tapSync('[data-action="share-probe"][data-kind="short"]'); await sleep(200); await ev('window.__shareFail=null,true');
+    ok(/rejected NotAllowedError/.test(await text('#probe-out')), 'a refused test share shows its error name');
+    ok(b4 === JSON.stringify(await one()) && (await cards()).every(c => c.state === 'new' && c.parts.every(p => !p.done)), 'the share test wrote nothing and ticked nothing');
+    await ev('window.__shares=[],window.__shareMeta=[],true'); }
   await shot('21-send-dark-320');
   await click('#send-next'); await until('document.querySelector(".send-w").dataset.state==="sent"', 5000, 'Joe sent');
   let sh = await shares();
@@ -892,6 +908,13 @@ async function run(){
     ok(/wouldn\u2019t open the share sheet/.test(await sheetText()) && (await ev('!!document.querySelector("#sheet-root [data-copy]")')), 'and the text is shown with a Copy button, which is a tap of its own');
     await ev('closeSheet(),true'); await sleep(200);
   }
+  // Copy link: the same send, copied inside the tap, never shared and never ticked.
+  await ev('window.__shareMeta=[],window.__clipSync=null,Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:function(t){window.__clipSync=!!window.__inTap;window.__clip=t;return Promise.resolve()}}}),true');
+  await tapSync('.send-w[data-wid="' + sw('Maria') + '"] [data-action="send-copy"]');
+  await until('/Copied\\. Paste it into a text to Maria/.test(document.getElementById("toast").textContent)', 4000, 'copy link');
+  { const c = await card('Maria'), M = await one();
+    ok((await ev('window.__clipSync')) === true && (await ev('window.__shareMeta.length')) === 0, 'Copy link copies inside the tap and never opens the share sheet');
+    ok((await ev('window.__clip')) === 'Mike: tasks for Oak St reno, ' + (await ev('dayLabel(' + q(M.day) + ')')) + '\n' + M.queue[sw('Maria')].parts[0].link && !c.parts[0].done && c.note === 'copied' && !M.sent[sw('Maria')], 'it copies the line and Maria\u2019s queued link, and ticks nothing', JSON.stringify(c)); }
   await ev('window.__shareFail=null,true'); await click('#send-next');
   await until('!!document.getElementById("send-done")', 5000, 'everything sent');
   ok((await cards()).every(c => c.state === 'sent') && JSON.stringify((await one()).queue) === '{}', 'when every worker is ticked the screen says everything is sent');

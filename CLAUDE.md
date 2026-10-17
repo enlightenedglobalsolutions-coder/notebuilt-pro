@@ -249,6 +249,17 @@ One record is one job's day for the whole crew:
   spent by then. Test gates: share and copy are called synchronously in the
   handler, a real tap still holds activation at the call, and a rejected
   share (`NotAllowedError`, or a throw) leaves the worker unticked.
+- **Copy link is a first-class control**, on every part row beside Send,
+  always shown. It is `sendPart(wid, n, true)`: the same send, written down
+  the same way, copied (the line and the link) inside the tap instead of
+  shared, and never ticked. The pilot cannot depend on `navigator.share`: on
+  the boss's Android phone, in Chrome and in the installed app, it resolved
+  with no picker shown (Oct 17).
+- **TEMPORARY: the share sheet test**, a closed `<details>` at the foot of
+  Send (`probeHtml`, `shareProbe`, `PROBES`). Three buttons share a bare short
+  URL, the full link as a bare URL, and the full text as Send does, and print
+  the length, `canShare` and how the promise settled, with its time. It writes
+  and ticks nothing. Remove it, and its tests, once the cause is known.
 - **Sent only when every part is ticked.** Each tick adds what that part
   carried to `sent[worker].ids` at once (so a tombstone can follow it even
   if the send is never finished) and leaves `at` alone. When the last part
@@ -336,7 +347,7 @@ is asked once there is a name, and again after each worker or job is added.
 
 ## Structure
 
-- One file, `index.html`, about 3,440 lines. No build step, no framework.
+- One file, `index.html`, about 3,480 lines. No build step, no framework.
 - Script blocks, in order: version stamp, theme pre-paint, the crew component,
   the app, service-worker registration.
 - `gate()` decides whether a gate owns the screen: `future`, `damaged`,
@@ -413,7 +424,7 @@ The file carries nine of the ten core `EGS-STD:` markers, plus `support`.
 
 ## Tests
 
-`node test_pro.js` — 525 checks, all passing. It serves this folder on
+`node test_pro.js` — 533 checks, all passing. It serves this folder on
 `127.0.0.1:8708` and drives real headless Chrome over CDP on real time.
 `--shots <dir>` also writes screenshots; `--bail` stops at the first failure.
 
@@ -460,8 +471,8 @@ Not covered:
   app before updating.
 - **The real share sheet, and a real text message.** The test replaces
   `navigator.share`. On a live Android phone (Oct 17) Send showed no sheet
-  and still ticked, so share resolved there without a sheet; why is not yet
-  known (thread `th_nbp_share_gesture`). Whether a link arrives whole and tappable is a phone
+  and still ticked, in Chrome and in the installed app: share resolved
+  without a picker. Why is not yet known (thread `th_nbp_share_gesture`). Whether a link arrives whole and tappable is a phone
   test.
 - The worker's side. Notebuilt cannot open a `#crew=` link yet, so a list
   sent from this build has nowhere to land until that is built. The merge is

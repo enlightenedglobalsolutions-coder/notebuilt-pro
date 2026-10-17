@@ -27,7 +27,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <!-- EGS-STD:coldopen-version -->
-<script>window.EGS_VERSION = '2026.10.17-1105 (8059d2e)';</script>
+<script>window.EGS_VERSION = '2026.10.17-1129 (c6a4ec5)';</script>
 <title>Notebuilt Pro</title>
 <meta name="description" content="Task lists for a crew, sent by text. Private, on-device, by EGS.">
 <!-- EGS-STD:themes — this script runs BEFORE the stylesheet so the first paint
@@ -2577,6 +2577,7 @@ function renderSend(r){
         return '<div class="part" data-n="'+i+'" data-done="'+(part.done ? '1' : '0')+'" data-chars="'+part.link.length+'">'
           +'<button class="tick" data-action="send-tick"'+tag+' data-n="'+i+'" aria-pressed="'+(part.done ? 'true' : 'false')+'" aria-label="'+esc(label+', sent')+'">'+I.check+'</button>'
           +'<span class="grow">'+esc(n>1 ? 'Part '+(i+1)+' of '+n : 'One text')+'</span>'
+          +'<button class="btn sm" data-action="send-copy"'+tag+' data-n="'+i+'">Copy link</button>'
           +'<button class="btn sm" data-action="send-part"'+tag+' data-n="'+i+'">'+(part.done ? 'Again' : 'Send')+'</button></div>';
       }).join('');
     } else if(p && !p.ok){
@@ -2600,7 +2601,7 @@ function renderSend(r){
     : waiting ? '<div class="card prose">Measuring the links\u2026</div>'
     : blocked ? '<div class="card prose">Nothing else can go until what\u2019s below is fixed.</div>'
     : '<div class="card prose" id="send-done">Everything is sent.</div>';
-  return head+top+'<div style="margin-top:14px">'+cards+'</div>'+versionStamp()+'</div>';
+  return head+top+'<div style="margin-top:14px">'+cards+'</div>'+probeHtml()+versionStamp()+'</div>';
 }
 function shareLine(rec, i, n){
   return rec.boss.name+': tasks for '+rec.job.name+', '+dayLabel(rec.day)+(n>1 ? ' (part '+(i+1)+' of '+n+')' : '');
@@ -2625,8 +2626,10 @@ async function queueStart(r, wid){
    sheet opens, not after it closes: a phone that shuts the app while the
    message is being written still knows which links belong to this send.
    The sheet is asked for before anything is awaited, because a browser only
-   opens it straight from a tap. */
-async function sendPart(wid, n){
+   opens it straight from a tap. With copy set it is Copy link: the same
+   send, written down the same way, copied instead of shared. Copying is not
+   sending, so the tick is left to the boss. */
+async function sendPart(wid, n, copy){
   const r = routeOf(view); if(r.base!=='send' || !r.jobId) return;
   const stored = listFind(r.jobId, r.day); if(!stored) return;
   const p = _prep.by[wid];
@@ -2639,7 +2642,7 @@ async function sendPart(wid, n){
   /* Both the share sheet and the clipboard are asked for here, inside the
      tap. Neither may come after an await: a phone refuses them once the tap
      is spent. Only a share that resolves ticks the part. */
-  const sharing = navigator.share ? shareStart(text) : null;
+  const sharing = (navigator.share && !copy) ? shareStart(text) : null;
   const copying = sharing ? null : clipWrite(text);
   const written = queueStart(r, wid);
   let outcome = 'copied', why = '';
@@ -2668,11 +2671,44 @@ async function sendPart(wid, n){
 }
 /* Each returns its promise straight away, still inside the tap. A call that
    throws instead of rejecting is turned into a rejection. */
-function shareStart(text){
-  try{ return Promise.resolve(navigator.share({ text:text })); }catch(e){ return Promise.reject(e); }
+function shareStart(text, data){
+  try{ return Promise.resolve(navigator.share(data || { text:text })); }catch(e){ return Promise.reject(e); }
 }
 function clipWrite(text){
   try{ return Promise.resolve(navigator.clipboard.writeText(text)); }catch(e){ return Promise.reject(e); }
+}
+/* TEMPORARY (th_nbp_share_gesture): which payloads open a share sheet on a
+   given phone. Shares only: it writes nothing and ticks nothing. Remove once
+   the cause is known. */
+const _probe = [];
+const PROBES = { short:'Short URL only', longurl:'Full link as URL only', text:'Full text, as Send does' };
+function probeHtml(){
+  return '<details class="card" id="probe" style="margin-top:14px"><summary>Share sheet test</summary>'
+    +'<p class="sub">Each button opens the share sheet with a different message. Nothing is sent or ticked. Note what each one shows.</p>'
+    +Object.keys(PROBES).map(k=>'<button class="btn sm block" style="margin-top:8px" data-action="share-probe" data-kind="'+k+'">'+esc(PROBES[k])+'</button>').join('')
+    +'<div class="mono" id="probe-out" style="font-size:12.5px;margin-top:10px;word-break:break-word">'+probeLines()+'</div></details>';
+}
+function probeLines(){ return _probe.map(x=>esc(x)).join('<br>'); }
+function probeData(kind){
+  if(kind==='short') return { url:location.origin+'/' };
+  const b = document.querySelector('[data-action="send-part"]'), r = routeOf(view);
+  const stored = b && r.jobId ? listFind(r.jobId, r.day) : null; if(!stored) return null;
+  const wid = b.dataset.wid, n = +b.dataset.n, p = _prep.by[wid];
+  const src = stored.queue[wid] || (p && p.ok ? p : null), part = src && src.parts[n];
+  if(!part) return null;
+  return kind==='longurl' ? { url:part.link } : { text:shareLine(listLive(stored), n, src.parts.length)+'\n'+part.link };
+}
+async function shareProbe(kind){
+  const d = probeData(kind), say = line=>{ _probe.push(line); const o = document.getElementById('probe-out'); if(o) o.innerHTML = probeLines(); };
+  if(!d){ say(PROBES[kind]+': no link here to test'); return; }
+  const chars = (d.url || d.text).length, t0 = Date.now();
+  let can = 'n/a';
+  try{ if(navigator.canShare) can = navigator.canShare(d) ? 'yes' : 'no'; }catch(e){ can = e.name; }
+  if(!navigator.share){ say(PROBES[kind]+': no navigator.share'); return; }
+  const sharing = shareStart(null, d);
+  let res;
+  try{ await sharing; res = 'resolved'; }catch(e){ res = 'rejected '+((e && e.name) || 'Error'); }
+  say(PROBES[kind]+' ('+chars+' chars, canShare '+can+'): '+res+' after '+(Date.now()-t0)+' ms');
 }
 /* A tick. What that part carried is recorded as given straight away, so a
    tombstone can follow it even if the rest of the send never goes. The
@@ -3344,6 +3380,8 @@ document.addEventListener('click', function(ev){
   else if(act==='task-down'){ moveTask(el.dataset.id, 1); }
   else if(act==='send-open'){ const r = routeOf(view); if(r.jobId) go('send/'+r.jobId+'/'+r.day); }
   else if(act==='send-part'){ sendPart(el.dataset.wid, +el.dataset.n); }
+  else if(act==='send-copy'){ sendPart(el.dataset.wid, +el.dataset.n, true); }
+  else if(act==='share-probe' && PROBES[el.dataset.kind]){ shareProbe(el.dataset.kind); }
   else if(act==='send-tick'){ tickPart(el.dataset.wid, +el.dataset.n, el.getAttribute('aria-pressed')!=='true'); }
   else if(act==='send-again'){ sendAgain(el.dataset.wid); }
   else if(act==='send-fix'){ sendFix(el.dataset.wid); }
