@@ -27,7 +27,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <!-- EGS-STD:coldopen-version -->
-<script>window.EGS_VERSION = '2026.10.14-1114 (3568279)';</script>
+<script>window.EGS_VERSION = '2026.10.17-1105 (8059d2e)';</script>
 <title>Notebuilt Pro</title>
 <meta name="description" content="Task lists for a crew, sent by text. Private, on-device, by EGS.">
 <!-- EGS-STD:themes — this script runs BEFORE the stylesheet so the first paint
@@ -1926,6 +1926,9 @@ function partLabel(name, i, n){ return name+'’s list'+(n>1 ? ', part '+(i+1)+'
    split() turns it into the fewest links that each fit, or refuses with its
    cause. The result waits here until Send is tapped; nothing is stored. */
 const _prep = { key:'', rev:-1, busy:false, by:{}, force:{} };
+/* Why a worker's last Send didn't go. In memory only; shown while the rev it
+   was made under stands and that part is unticked. */
+const sendNote = {};
 function prepFor(stored){
   if(_prep.key===stored.listId && _prep.rev===rev) return;
   if(_prep.key!==stored.listId){ _prep.by = {}; _prep.force = {}; }
@@ -2585,6 +2588,9 @@ function renderSend(r){
     } else if(st.k==='sent'){
       body = '<button class="btn sm" style="margin-top:10px" data-action="send-again"'+tag+'>Send again</button>';
     } else { waiting++; body = '<div class="sub" style="margin-top:8px">Measuring\u2026</div>'; }
+    const note = sendNote[w.id];
+    if(note && note.rev===rev && q && q.parts[note.n] && !q.parts[note.n].done)
+      body += '<div class="field-msg '+(note.outcome==='copied' ? 'warn' : 'bad')+' send-note" data-outcome="'+note.outcome+'">'+esc(note.text)+'</div>';
     return '<div class="card send-w"'+tag+' data-state="'+st.k+'"'+(code ? ' data-refused="'+esc(code)+'"' : '')+'>'
       +'<div class="grp"><span class="who">'+esc(w.name)+'</span>'+sendPill(st)+'</div>'+body+'</div>';
   }).join('');
@@ -2629,24 +2635,44 @@ async function sendPart(wid, n){
   if(!part) return;
   const rec = listLive(stored), w = rec.workers.find(x=>x.id===wid);
   const text = shareLine(rec, n, src.parts.length)+'\n'+part.link;
+  delete sendNote[wid];
+  /* Both the share sheet and the clipboard are asked for here, inside the
+     tap. Neither may come after an await: a phone refuses them once the tap
+     is spent. Only a share that resolves ticks the part. */
+  const sharing = navigator.share ? shareStart(text) : null;
+  const copying = sharing ? null : clipWrite(text);
   const written = queueStart(r, wid);
-  let shared = false, backedOut = false;
-  if(navigator.share){
-    try{ await navigator.share({ text:text }); shared = true; }
-    catch(e){ backedOut = !!(e && e.name==='AbortError'); }
+  let outcome = 'copied', why = '';
+  if(sharing){
+    try{ await sharing; outcome = 'shared'; }
+    catch(e){ outcome = (e && e.name==='AbortError') ? 'closed' : 'refused'; why = (e && e.name) || 'Error'; }
+  } else {
+    try{ await copying; }catch(e){ outcome = 'nocopy'; }
   }
   if(!(await written)){ render(); return; }                  /* it could not be written down, and said so */
-  if(shared){ await tickPart(wid, n, true); return; }
-  if(backedOut){ render(); return; }                         /* backed out: not sent, not ticked */
-  /* No share sheet here. Copying is not sending, so the tick is left to you. */
-  try{ await navigator.clipboard.writeText(text); render(); toast('Copied. Paste it into a text to '+(w ? w.name : 'them')+', then tick it.'); }
-  catch(e){
-    render();
-    sheet('<h2>'+esc(partLabel(w ? w.name : 'Their', n, src.parts.length))+'</h2>'
-      +'<div class="muted" style="font-size:13px;margin-bottom:10px">Copy this and send it by text, then tick it:</div>'
-      +'<div class="card mono" style="font-size:12.5px;word-break:break-all;line-height:1.6">'+esc(text)+'</div>'
-      +'<button class="btn primary block" data-copy="'+esc(text)+'">Copy</button>');
-  }
+  if(outcome==='shared'){ await tickPart(wid, n, true); return; }
+  const who = w ? w.name : 'them';
+  sendNote[wid] = { rev:rev, n:n, outcome:outcome,
+    text: outcome==='closed' ? 'Not sent. The share sheet was closed before anything went.'
+      : outcome==='refused' ? 'Not sent. This phone wouldn’t open the share sheet ('+why+').'
+      : outcome==='nocopy' ? 'Not sent. It couldn’t be copied either.'
+      : 'Copied, not sent yet. Paste it into a text to '+who+', then tick it.' };
+  render();
+  if(outcome==='copied'){ toast('Copied. Paste it into a text to '+who+', then tick it.'); return; }
+  if(outcome==='closed') return;
+  /* The tap is spent, so the text is shown with a Copy button: that is a tap of its own. */
+  sheet('<h2>'+esc(partLabel(w ? w.name : 'Their', n, src.parts.length))+'</h2>'
+    +'<div class="muted" style="font-size:13px;margin-bottom:10px">'+esc(sendNote[wid].text)+' Copy this and send it by text, then tick it:</div>'
+    +'<div class="card mono" style="font-size:12.5px;word-break:break-all;line-height:1.6">'+esc(text)+'</div>'
+    +'<button class="btn primary block" data-copy="'+esc(text)+'">Copy</button>');
+}
+/* Each returns its promise straight away, still inside the tap. A call that
+   throws instead of rejecting is turned into a rejection. */
+function shareStart(text){
+  try{ return Promise.resolve(navigator.share({ text:text })); }catch(e){ return Promise.reject(e); }
+}
+function clipWrite(text){
+  try{ return Promise.resolve(navigator.clipboard.writeText(text)); }catch(e){ return Promise.reject(e); }
 }
 /* A tick. What that part carried is recorded as given straight away, so a
    tombstone can follow it even if the rest of the send never goes. The
@@ -2655,6 +2681,7 @@ async function sendPart(wid, n){
 async function tickPart(wid, n, flag){
   const r = routeOf(view); if(r.base!=='send' || !r.jobId) return;
   if(!(await queueStart(r, wid))) return;
+  if(flag) delete sendNote[wid];
   const why = await listEdit(r.jobId, r.day, rec=>{
     const q = rec.queue[wid], part = q && q.parts[n];
     if(!part || part.done===flag) return NOTHING;

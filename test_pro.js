@@ -191,7 +191,7 @@ async function run(){
   // ---- stage 3 helpers: lists, the Day screen, the share sheet ----
   const dump = () => ev('idbDump().then(function(d){return JSON.stringify(d.lists)})').then(JSON.parse);
   const listsReady = () => until('listsState==="ready"', 8000, 'lists read');
-  const hookShare = () => ev('window.__shares=window.__shares||[],window.__shareFail=null,navigator.share=function(d){if(window.__shareFail==="hang")return new Promise(function(){});if(window.__shareFail){var e=new Error("x");e.name=window.__shareFail;return Promise.reject(e)}window.__shares.push(d);return Promise.resolve()},true');
+  const hookShare = () => ev('window.__shares=window.__shares||[],window.__shareFail=null,navigator.share=function(d){(window.__shareMeta=window.__shareMeta||[]).push({sync:!!window.__inTap,active:!!(navigator.userActivation&&navigator.userActivation.isActive)});if(window.__shareFail==="throw")throw new TypeError("x");if(window.__shareFail==="hang")return new Promise(function(){});if(window.__shareFail){var e=new Error("x");e.name=window.__shareFail;return Promise.reject(e)}window.__shares.push(d);return Promise.resolve()},true');
   const shares = () => ev('JSON.stringify(window.__shares||[])').then(JSON.parse);
   const chip = (name, box) => ev('(function(n){var c=Array.prototype.filter.call(document.querySelectorAll(' + q((box || '#day-who') + ' .chip') + '),function(e){return e.textContent===n})[0];if(!c)throw new Error("no chip "+n);c.click();return true})(' + q(name) + ')');
   const taskCount = () => ev('document.querySelectorAll("#day-body .task").length');
@@ -201,12 +201,18 @@ async function run(){
     await until('!!document.getElementById("sheet-root").innerHTML', 3000, 'task sheet'); };
   // {name: state} for every worker heading on the Day screen, or every card on Send.
   const dayStates = () => ev('JSON.stringify(Array.prototype.map.call(document.querySelectorAll("#day-body .grp[data-wid]"),function(g){return [g.querySelector(".who").textContent,g.querySelector(".pill").dataset.state]}))').then(a => Object.fromEntries(JSON.parse(a)));
-  const cards = () => ev('JSON.stringify(Array.prototype.map.call(document.querySelectorAll(".send-w"),function(c){return {name:c.querySelector(".who").textContent,state:c.dataset.state,refused:c.dataset.refused||"",pill:c.querySelector(".pill").textContent,parts:Array.prototype.map.call(c.querySelectorAll(".part"),function(p){return {done:p.dataset.done==="1",chars:+p.dataset.chars}}),text:c.textContent,fix:!!c.querySelector("[data-action=send-fix]"),again:!!c.querySelector("[data-action=send-again]")}}))').then(JSON.parse);
+  const cards = () => ev('JSON.stringify(Array.prototype.map.call(document.querySelectorAll(".send-w"),function(c){return {name:c.querySelector(".who").textContent,state:c.dataset.state,refused:c.dataset.refused||"",pill:c.querySelector(".pill").textContent,parts:Array.prototype.map.call(c.querySelectorAll(".part"),function(p){return {done:p.dataset.done==="1",chars:+p.dataset.chars}}),note:(c.querySelector(".send-note")||{dataset:{}}).dataset.outcome||"",text:c.textContent,fix:!!c.querySelector("[data-action=send-fix]"),again:!!c.querySelector("[data-action=send-again]")}}))').then(JSON.parse);
   const card = async name => (await cards()).find(c => c.name === name);
   const measured = () => until('!!document.querySelector(".send-w") && !/Measuring/.test(document.getElementById("app").textContent)', 20000, 'links measured');
   const inCard = (name, sel) => ev('(function(n){var c=Array.prototype.filter.call(document.querySelectorAll(".send-w"),function(e){return e.querySelector(".who").textContent===n})[0];var b=c&&c.querySelector(' + q(sel) + ');if(!b)throw new Error("nothing matching ' + sel.replace(/"/g, "'") + ' for "+n);b.click();return true})(' + q(name) + ')');
   const decode = link => ev('EGSCrew.decode(' + q(link.slice(link.indexOf('#crew=') + 6)) + ',"list").then(function(r){return JSON.stringify(r)})').then(JSON.parse);
   const linkOf = share => share.text.split('\n')[1];
+  // A tap whose handler runs with __inTap set: anything the app calls after an await sees it cleared.
+  const tapSync = sel => ev('(function(){var e=document.querySelector(' + q(sel) + ');if(!e)throw new Error("no element");window.__inTap=true;try{e.click()}finally{window.__inTap=false}return true})()');
+  // A real tap through the input pipeline, so the page gets genuine user activation.
+  const realTap = async sel => { const r = JSON.parse(await ev('(function(){var e=document.querySelector(' + q(sel) + ');e.scrollIntoView({block:"center"});var b=e.getBoundingClientRect();return JSON.stringify({x:b.left+b.width/2,y:b.top+b.height/2})})()'));
+    for(const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x:r.x, y:r.y, button:'left', clickCount:1 }); };
+  const sheetText = () => ev('document.getElementById("sheet-root").textContent');
   const goHome = async () => { await ev('go("home")'); await until('location.hash==="#/home"', 4000, 'home'); };
   // Lists put straight into the phone's storage, the way a restore leaves them.
   const seedLists = arr => ev(`new Promise(function(res,rej){var r=indexedDB.open('notebuiltpro',3);
@@ -866,7 +872,26 @@ async function run(){
   await ev('window.__shareFail="AbortError",true'); await click('#send-next'); await sleep(400);
   { const M = await one(), c = await card('Maria');
     ok(c.state === 'part' && c.parts.length === 1 && !c.parts[0].done && c.pill === 'Not sent' && !M.sent[sw('Maria')] && (await shares()).length === 0, 'backing out of the share sheet ticks nothing', JSON.stringify(c));
-    ok(M.queue[sw('Maria')] && M.queue[sw('Maria')].parts.length === 1 && M.queue[sw('Maria')].parts[0].done === false, 'and the send stays written down'); }
+    ok(M.queue[sw('Maria')] && M.queue[sw('Maria')].parts.length === 1 && M.queue[sw('Maria')].parts[0].done === false, 'and the send stays written down');
+    ok(c.note === 'closed' && /Not sent\. The share sheet was closed/.test(c.text), 'and Maria\u2019s row says it did not go', JSON.stringify(c)); }
+  // GATE (th_nbp_share_gesture): a phone only opens the share sheet straight from a tap.
+  await ev('window.__shareMeta=[],true'); await tapSync('#send-next'); await sleep(300);
+  { const m = JSON.parse(await ev('JSON.stringify(window.__shareMeta)'));
+    ok(m.length === 1 && m[0].sync === true, 'GATE: Send calls navigator.share synchronously inside the tap handler, before any await', JSON.stringify(m)); }
+  await realTap('#send-next'); await until('window.__shareMeta.length===2', 4000, 'real tap shared');
+  { const m = JSON.parse(await ev('JSON.stringify(window.__shareMeta)'));
+    ok(m[1].active === true, 'GATE: on a real tap the page still holds user activation when share is called', JSON.stringify(m)); }
+  await sleep(300);
+  // GATE: a share the phone refuses, or one that throws, is not a send.
+  for(const fail of ['NotAllowedError', 'throw']){
+    await ev('window.__shareFail=' + q(fail) + ',true'); await click('#send-next');
+    await until('!!document.getElementById("sheet-root").innerHTML', 4000, 'copy sheet');
+    const M = await one(), c = await card('Maria');
+    ok(c.state === 'part' && !c.parts[0].done && c.pill === 'Not sent' && c.note === 'refused' && !M.sent[sw('Maria')] && M.queue[sw('Maria')].parts[0].done === false && (await shares()).length === 0,
+      'GATE: a rejected share (' + fail + ') leaves Maria unticked, and her row says it did not go', JSON.stringify(c));
+    ok(/wouldn\u2019t open the share sheet/.test(await sheetText()) && (await ev('!!document.querySelector("#sheet-root [data-copy]")')), 'and the text is shown with a Copy button, which is a tap of its own');
+    await ev('closeSheet(),true'); await sleep(200);
+  }
   await ev('window.__shareFail=null,true'); await click('#send-next');
   await until('!!document.getElementById("send-done")', 5000, 'everything sent');
   ok((await cards()).every(c => c.state === 'sent') && JSON.stringify((await one()).queue) === '{}', 'when every worker is ticked the screen says everything is sent');
@@ -963,10 +988,18 @@ async function run(){
   // No share sheet: the link is copied, and copying is not sending.
   await toSend();
   await ev('navigator.share=undefined,Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:function(t){window.__clip=t;return Promise.resolve()}}}),true');
-  await click('#send-next'); await until('/Copied\\. Paste it into a text to Zed, then tick it\\./.test(document.getElementById("toast").textContent)', 4000, 'copied');
+  await ev('window.__clipSync=null,navigator.clipboard.writeText=function(t){window.__clipSync=!!window.__inTap;window.__clip=t;return Promise.resolve()},true');
+  await tapSync('#send-next'); await until('/Copied\\. Paste it into a text to Zed, then tick it\\./.test(document.getElementById("toast").textContent)', 4000, 'copied');
+  ok((await ev('window.__clipSync')) === true, 'GATE: with no share sheet, the copy is asked for synchronously inside the tap too');
+  ok((await card('Zed')).note === 'copied', 'and Zed\u2019s row says it is copied, not sent');
   { const c = await card('Zed'); ok(c.state === 'part' && c.parts.every(p => !p.done) && /^Mike: tasks for Oak St reno/.test(await ev('window.__clip')) && (await ev('window.__clip')).split('\n')[1].indexOf('https://notebuilt.ca/#crew=') === 0, 'with no share sheet the same text is copied, and the part is not ticked for you', JSON.stringify(c)); }
   await inCard('Zed', '.tick'); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part') + ').dataset.done==="1"', 4000, 'ticked by hand');
   ok((await card('Zed')).parts.filter(p => p.done).length === 1 && (await card('Zed')).state === 'part', 'ticking it by hand ticks that part, and only that part');
+  // A copy that fails is not a send either.
+  await ev('navigator.clipboard.writeText=function(){return Promise.reject(new Error("no"))},true');
+  await click('#send-next'); await until('!!document.getElementById("sheet-root").innerHTML', 4000, 'copy sheet');
+  { const c = await card('Zed'); ok(c.parts.filter(p => p.done).length === 1 && c.note === 'nocopy' && /couldn\u2019t be copied/.test(c.text) && /Copy this/.test(await sheetText()), 'a failed copy ticks nothing, the row says so, and the text is shown to copy by hand', JSON.stringify(c)); }
+  await ev('closeSheet(),true'); await sleep(200);
   const b4again = JSON.stringify(await one());
   await inCard('Joe', '[data-action="send-again"]'); await measured(); await sleep(900);
   { const c = await card('Joe'), b4 = b4again;
