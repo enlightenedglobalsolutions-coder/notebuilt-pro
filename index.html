@@ -27,7 +27,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <!-- EGS-STD:coldopen-version -->
-<script>window.EGS_VERSION = '2026.10.17-1129 (c6a4ec5)';</script>
+<script>window.EGS_VERSION = '2026.10.17-1154 (95f7dbf)';</script>
 <title>Notebuilt Pro</title>
 <meta name="description" content="Task lists for a crew, sent by text. Private, on-device, by EGS.">
 <!-- EGS-STD:themes — this script runs BEFORE the stylesheet so the first paint
@@ -1667,13 +1667,16 @@ async function idbClearLists(){
    { listId, createdAt, updatedAt, boss:{id,name}, job:{id,name}, day,
      workers:[{id,name}], tasks:[{id, worker, text, order, editedAt, gone}],
      sent:{ <workerId>:{at, ids:[taskId…]} },
-     queue:{ <workerId>:{sendId, at, parts:[{link, ids:[taskId…], done}]} } }
+     queue:{ <workerId>:{sendId, at, parts:[{link, ids:[taskId…], done, out?}]} } }
 
    workers, tasks and sent are the component's own shapes, and the component
    reads and writes them. `sent` is what each worker has been given: it is
    what lets a resend carry a tombstone. `queue` is a send that has started
    and not finished: the exact links, so every part of one send goes out
-   under one sendId even if the app is closed halfway through.
+   under one sendId even if the app is closed halfway through. A part's
+   `out` is {how:'share'|'copy', at}: the last time it was handed to the
+   share sheet or copied. It is a fact about this phone, not a send: `done`
+   is only ever the boss's own tick.
 
    A task is never removed. Cancelling sets gone:'cancelled' and keeps it;
    reassigning changes its worker, and the component turns that into a
@@ -1713,7 +1716,10 @@ function cleanList(o, fromFile){
       for(const p of q.parts){
         if(!isObj(p) || typeof p.link!=='string' || p.link.length>EGSCrew.SAFE_LINK_CHARS || p.link.indexOf(EGSCrew.LINK.list)!==0
            || !EGSCrew.fromHash('#crew='+p.link.slice(EGSCrew.LINK.list.length), 'list') || !idList(p.ids) || typeof p.done!=='boolean') return null;
-        parts.push({ link:p.link, ids:p.ids.slice(), done:p.done });
+        if(p.out!==undefined && (!isObj(p.out) || (p.out.how!=='share' && p.out.how!=='copy') || !timeOk(p.out.at))) return null;
+        const part = { link:p.link, ids:p.ids.slice(), done:p.done };
+        if(p.out!==undefined) part.out = { how:p.out.how, at:p.out.at };
+        parts.push(part);
       }
       queue[wid] = { sendId:q.sendId, at:q.at, parts:parts };
     }
@@ -2563,22 +2569,27 @@ function renderSend(r){
   if(!ws.length) return head+'<div class="card prose">There\u2019s nothing to send for this day yet. Add a task first.</div>'+versionStamp()+'</div>';
   prepFor(stored);
   const fresh = _prep.key===stored.listId && _prep.rev===rev && !_prep.busy;
-  let next = null, waiting = 0, blocked = 0;
+  let next = null, waiting = 0, blocked = 0, unticked = 0;
   const cards = ws.map(w=>{
     const st = sendState(rec, w.id), q = rec.queue[w.id], p = q ? null : (fresh ? _prep.by[w.id] : null);
     const src = q || (p && p.ok ? p : null), tag = ' data-wid="'+esc(w.id)+'"';
     let body = '', code = '';
+    const note = sendNote[w.id] && sendNote[w.id].rev===rev && q && q.parts[sendNote[w.id].n] && !q.parts[sendNote[w.id].n].done ? sendNote[w.id] : null;
     if(src){
       const n = src.parts.length;
       if(n>1) body += '<div class="sub" style="margin-top:8px">'+esc('Too long for one text, so it goes as '+n+'. Send every part.')+'</div>';
       body += src.parts.map((part,i)=>{
         const label = partLabel(w.name, i, n);
-        if(!part.done && !next) next = { wid:w.id, n:i, label:label };
-        return '<div class="part" data-n="'+i+'" data-done="'+(part.done ? '1' : '0')+'" data-chars="'+part.link.length+'">'
+        /* The queue moves on past a part that has gone out; it still waits for its tick. */
+        if(!part.done && !part.out && !next) next = { wid:w.id, n:i, label:label };
+        if(!part.done) unticked++;
+        return '<div class="part" data-n="'+i+'" data-done="'+(part.done ? '1' : '0')+'" data-out="'+(part.out ? part.out.how : '')+'" data-chars="'+part.link.length+'">'
           +'<button class="tick" data-action="send-tick"'+tag+' data-n="'+i+'" aria-pressed="'+(part.done ? 'true' : 'false')+'" aria-label="'+esc(label+', sent')+'">'+I.check+'</button>'
           +'<span class="grow">'+esc(n>1 ? 'Part '+(i+1)+' of '+n : 'One text')+'</span>'
           +'<button class="btn sm" data-action="send-copy"'+tag+' data-n="'+i+'">Copy link</button>'
-          +'<button class="btn sm" data-action="send-part"'+tag+' data-n="'+i+'">'+(part.done ? 'Again' : 'Send')+'</button></div>';
+          +'<button class="btn sm" data-action="send-part"'+tag+' data-n="'+i+'">'+(part.done ? 'Again' : 'Send')+'</button></div>'
+          +(part.out && !part.done && !(note && note.n===i) ? '<div class="sub part-out" data-how="'+part.out.how+'">'
+            +esc((part.out.how==='share' ? 'Handed to the share sheet ' : 'Copied ')+sentLabel(part.out.at)+' \u2014 tick when it\u2019s sent')+'</div>' : '');
       }).join('');
     } else if(p && !p.ok){
       /* Refused before anything is shared, with its own cause (rule 12). */
@@ -2589,8 +2600,7 @@ function renderSend(r){
     } else if(st.k==='sent'){
       body = '<button class="btn sm" style="margin-top:10px" data-action="send-again"'+tag+'>Send again</button>';
     } else { waiting++; body = '<div class="sub" style="margin-top:8px">Measuring\u2026</div>'; }
-    const note = sendNote[w.id];
-    if(note && note.rev===rev && q && q.parts[note.n] && !q.parts[note.n].done)
+    if(note)
       body += '<div class="field-msg '+(note.outcome==='copied' ? 'warn' : 'bad')+' send-note" data-outcome="'+note.outcome+'">'+esc(note.text)+'</div>';
     return '<div class="card send-w"'+tag+' data-state="'+st.k+'"'+(code ? ' data-refused="'+esc(code)+'"' : '')+'>'
       +'<div class="grp"><span class="who">'+esc(w.name)+'</span>'+sendPill(st)+'</div>'+body+'</div>';
@@ -2599,6 +2609,7 @@ function renderSend(r){
   const top = next ? '<button class="btn primary block" id="send-next" data-action="send-part" data-wid="'+esc(next.wid)+'" data-n="'+next.n+'">'+esc('Send '+next.label)+'</button>'
       +'<div class="sub" id="send-count" style="margin-top:8px">'+esc(sentN+' of '+ws.length+' sent')+'</div>'
     : waiting ? '<div class="card prose">Measuring the links\u2026</div>'
+    : (unticked && !blocked) ? '<div class="card prose" id="send-tickall">'+esc('Everything has gone out. Tick each one once you know it\u2019s sent.')+'</div><div class="sub" id="send-count" style="margin-top:8px">'+esc(sentN+' of '+ws.length+' sent')+'</div>'
     : blocked ? '<div class="card prose">Nothing else can go until what\u2019s below is fixed.</div>'
     : '<div class="card prose" id="send-done">Everything is sent.</div>';
   return head+top+'<div style="margin-top:14px">'+cards+'</div>'+probeHtml()+versionStamp()+'</div>';
@@ -2627,8 +2638,8 @@ async function queueStart(r, wid){
    message is being written still knows which links belong to this send.
    The sheet is asked for before anything is awaited, because a browser only
    opens it straight from a tap. With copy set it is Copy link: the same
-   send, written down the same way, copied instead of shared. Copying is not
-   sending, so the tick is left to the boss. */
+   send, written down the same way, copied instead of shared. Neither ticks:
+   the tick is only ever the boss's own. */
 async function sendPart(wid, n, copy){
   const r = routeOf(view); if(r.base!=='send' || !r.jobId) return;
   const stored = listFind(r.jobId, r.day); if(!stored) return;
@@ -2641,7 +2652,7 @@ async function sendPart(wid, n, copy){
   delete sendNote[wid];
   /* Both the share sheet and the clipboard are asked for here, inside the
      tap. Neither may come after an await: a phone refuses them once the tap
-     is spent. Only a share that resolves ticks the part. */
+     is spent. Nothing here ticks a part. */
   const sharing = (navigator.share && !copy) ? shareStart(text) : null;
   const copying = sharing ? null : clipWrite(text);
   const written = queueStart(r, wid);
@@ -2653,15 +2664,28 @@ async function sendPart(wid, n, copy){
     try{ await copying; }catch(e){ outcome = 'nocopy'; }
   }
   if(!(await written)){ render(); return; }                  /* it could not be written down, and said so */
-  if(outcome==='shared'){ await tickPart(wid, n, true); return; }
   const who = w ? w.name : 'them';
+  /* A share that resolves proves nothing: on at least one Android phone it
+     resolves with no picker shown. So nothing here ticks. What the app does
+     know, that the part was handed over or copied, is written down as that. */
+  if(outcome==='shared' || outcome==='copied'){
+    const sendId = src.sendId, how = outcome==='shared' ? 'share' : 'copy';
+    const said = await listEdit(r.jobId, r.day, rec=>{
+      const q = rec.queue[wid], pp = q && q.sendId===sendId ? q.parts[n] : null;
+      if(!pp) return NOTHING;
+      pp.out = { how:how, at:nowSec() };
+      return null;
+    }, true);
+    if(said && said!==NOTHING) toast(said);
+    render();
+    if(how==='copy' && !(said && said!==NOTHING)) toast('Copied. Paste it into a text to '+who+', then tick it.');
+    return;
+  }
   sendNote[wid] = { rev:rev, n:n, outcome:outcome,
     text: outcome==='closed' ? 'Not sent. The share sheet was closed before anything went.'
       : outcome==='refused' ? 'Not sent. This phone wouldn’t open the share sheet ('+why+').'
-      : outcome==='nocopy' ? 'Not sent. It couldn’t be copied either.'
-      : 'Copied, not sent yet. Paste it into a text to '+who+', then tick it.' };
+      : 'Not sent. It couldn’t be copied either.' };
   render();
-  if(outcome==='copied'){ toast('Copied. Paste it into a text to '+who+', then tick it.'); return; }
   if(outcome==='closed') return;
   /* The tap is spent, so the text is shown with a Copy button: that is a tap of its own. */
   sheet('<h2>'+esc(partLabel(w ? w.name : 'Their', n, src.parts.length))+'</h2>'

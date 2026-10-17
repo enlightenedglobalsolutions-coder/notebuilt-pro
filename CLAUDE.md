@@ -176,7 +176,7 @@ One record is one job's day for the whole crew:
   workers:[{id,name}],                       kept in id order
   tasks:[{id, worker, text, order, editedAt, gone}],
   sent:{ <workerId>:{at, ids:[taskId]} },
-  queue:{ <workerId>:{sendId, at, parts:[{link, ids:[taskId], done}]} } }
+  queue:{ <workerId>:{sendId, at, parts:[{link, ids:[taskId], done, out?}]} } }
 ```
 
 - `workers`, `tasks` and `sent` are the crew component's own shapes. The
@@ -235,26 +235,36 @@ One record is one job's day for the whole crew:
   and asks for the share sheet in the same breath, without waiting for the
   write: a browser only opens the sheet straight from a tap, and the write
   has to be under way before the phone can close the app behind the sheet.
-  So the links of one send keep one `sendId` across a restart. A part is
-  ticked when the share sheet resolves; backing out ticks nothing; with no
-  share sheet the text is copied and the tick is left to the boss. A tick can
-  be taken back. The queue button shows how many people are sent.
+  So the links of one send keep one `sendId` across a restart.
+- **Only the boss ticks (Oct 17, spec §7).** Neither Send nor Copy link ticks
+  a part, whatever the share sheet says: on the boss's Android phone, in
+  Chrome and in the installed app, `navigator.share` resolved with no picker
+  shown, so a resolve is not evidence of anything. What the app does know is
+  stored on the part as `out:{how:'share'|'copy', at}` (written after the
+  share resolves or the copy succeeds, through `listEdit`, only if the
+  queue's `sendId` is unchanged) and drawn under the row: "Handed to the
+  share sheet 11:09 — tick when it's sent" or "Copied 11:09 — tick when it's
+  sent". `out` is optional and `cleanList()` judges it; older builds drop it
+  on read, so no schema bump. "N of M sent" and "Everything is sent" count
+  only ticks. The queue button moves past a part that has gone out; when
+  every part has gone out and some are unticked, the top says "Everything
+  has gone out. Tick each one once you know it's sent." A tick can be taken
+  back.
 - **Inside the tap, or not at all.** `sendPart()` calls `navigator.share`
   (or, with no share sheet, `navigator.clipboard.writeText`) before its first
   await, through `shareStart()` / `clipWrite()`, which turn a throw into a
-  rejection. Only a share that resolves ticks. A share that is closed, refused
-  or throws, and a copy that fails, tick nothing; the row says why
-  (`sendNote`, in memory, dropped by a tick or a `rev` change). A refused
+  rejection. A share that is closed, refused or throws, and a copy that
+  fails, write no `out`; the row says why (`sendNote`, in memory, dropped by
+  a tick or a `rev` change, and shown in place of that part's `out` line). A refused
   share or a failed copy shows the text with a Copy button, since the tap is
   spent by then. Test gates: share and copy are called synchronously in the
-  handler, a real tap still holds activation at the call, and a rejected
-  share (`NotAllowedError`, or a throw) leaves the worker unticked.
+  handler, a real tap still holds activation at the call, a resolved share
+  ticks nothing, and a rejected share (`NotAllowedError`, or a throw)
+  leaves the worker unticked.
 - **Copy link is a first-class control**, on every part row beside Send,
   always shown. It is `sendPart(wid, n, true)`: the same send, written down
   the same way, copied (the line and the link) inside the tap instead of
-  shared, and never ticked. The pilot cannot depend on `navigator.share`: on
-  the boss's Android phone, in Chrome and in the installed app, it resolved
-  with no picker shown (Oct 17).
+  shared. The pilot cannot depend on `navigator.share`.
 - **TEMPORARY: the share sheet test**, a closed `<details>` at the foot of
   Send (`probeHtml`, `shareProbe`, `PROBES`). Three buttons share a bare short
   URL, the full link as a bare URL, and the full text as Send does, and print
@@ -347,7 +357,7 @@ is asked once there is a name, and again after each worker or job is added.
 
 ## Structure
 
-- One file, `index.html`, about 3,480 lines. No build step, no framework.
+- One file, `index.html`, about 3,500 lines. No build step, no framework.
 - Script blocks, in order: version stamp, theme pre-paint, the crew component,
   the app, service-worker registration.
 - `gate()` decides whether a gate owns the screen: `future`, `damaged`,
@@ -424,7 +434,7 @@ The file carries nine of the ten core `EGS-STD:` markers, plus `support`.
 
 ## Tests
 
-`node test_pro.js` — 533 checks, all passing. It serves this folder on
+`node test_pro.js` — 540 checks, all passing. It serves this folder on
 `127.0.0.1:8708` and drives real headless Chrome over CDP on real time.
 `--shots <dir>` also writes screenshots; `--bail` stops at the first failure.
 
