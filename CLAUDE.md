@@ -176,7 +176,7 @@ One record is one job's day for the whole crew:
   workers:[{id,name}],                       kept in id order
   tasks:[{id, worker, text, order, editedAt, gone}],
   sent:{ <workerId>:{at, ids:[taskId]} },
-  queue:{ <workerId>:{sendId, at, parts:[{link, ids:[taskId], done, out?}]} } }
+  queue:{ <workerId>:{sendId, at, before?, parts:[{link, ids:[taskId], done, out?}]} } }
 ```
 
 - `workers`, `tasks` and `sent` are the crew component's own shapes. The
@@ -236,45 +236,63 @@ One record is one job's day for the whole crew:
   write: a browser only opens the sheet straight from a tap, and the write
   has to be under way before the phone can close the app behind the sheet.
   So the links of one send keep one `sendId` across a restart.
-- **Only the boss ticks (Oct 17, spec §7).** Neither Send nor Copy link ticks
-  a part, whatever the share sheet says: on the boss's Android phone, in
-  Chrome and in the installed app, `navigator.share` resolved with no picker
-  shown, so a resolve is not evidence of anything. What the app does know is
-  stored on the part as `out:{how:'share'|'copy', at}` (written after the
-  share resolves or the copy succeeds, through `listEdit`, only if the
-  queue's `sendId` is unchanged) and drawn under the row: "Handed to the
-  share sheet 11:09 — tick when it's sent" or "Copied 11:09 — tick when it's
-  sent". `out` is optional and `cleanList()` judges it; older builds drop it
-  on read, so no schema bump. "N of M sent" and "Everything is sent" count
-  only ticks. The queue button moves past a part that has gone out; when
-  every part has gone out and some are unticked, the top says "Everything
-  has gone out. Tick each one once you know it's sent." A tick can be taken
-  back.
+- **Only the boss marks a part sent (Oct 17–18, spec §7).** Neither Send
+  nor Copy link marks anything, whatever the share sheet says. What the app
+  does know is stored on the part as `out:{how:'share'|'copy', at}` (written
+  after the share resolves or the copy succeeds, through `listEdit`, only if
+  the queue's `sendId` is unchanged). `out` is optional and `cleanList()`
+  judges it; older builds drop it on read, so no schema bump.
+- **Mark sent exists only after a hand-off (Oct 18).** The part row is a
+  plain label ("One text", "Part 1 of 2", `.part-label`, a dim span inside
+  no control), Copy link and Send. Under it `partOut()` draws nothing until
+  the part has an `out`; then "Handed to the share sheet 9:08" or "Copied
+  9:08" with a worded **Mark sent** button; once marked, "… Marked sent."
+  with **Undo**. `markPart()` refuses to mark a part with no `out`. There
+  was a bare circle tick here until Oct 18; on the boss's phone it read as a
+  send button, and one tap marked a worker sent with nothing sent and no way
+  back. "N of M sent" and "Everything is sent" count only marks. The queue
+  button moves past a part that has gone out; when every part has gone out
+  and some are unmarked, the top says "Everything has gone out. Tap Mark
+  sent on each one once you know it's sent."
+- **Undo puts back exactly what was there.** `queueStart()` stores the
+  worker's `sent` entry as the send began in `queue[w].before` (null for
+  none). `sentAfter()` works `sent[w]` out from `before` plus every marked
+  part, plus the whole send once every part is marked, so marking and
+  undoing are the same sum. `listPut()`'s grow-only guard (`sentDropped()`)
+  lets a write take back only what that same send's parts added, and only
+  while the queue and its `before` are unchanged. A queue an older build
+  started has no `before`: a mark only adds, and an undo leaves `sent`.
 - **Inside the tap, or not at all.** `sendPart()` calls `navigator.share`
   (or, with no share sheet, `navigator.clipboard.writeText`) before its first
   await, through `shareStart()` / `clipWrite()`, which turn a throw into a
   rejection. A share that is closed, refused or throws, and a copy that
-  fails, write no `out`; the row says why (`sendNote`, in memory, dropped by
-  a tick or a `rev` change, and shown in place of that part's `out` line). A refused
-  share or a failed copy shows the text with a Copy button, since the tap is
-  spent by then. Test gates: share and copy are called synchronously in the
-  handler, a real tap still holds activation at the call, a resolved share
-  ticks nothing, and a rejected share (`NotAllowedError`, or a throw)
-  leaves the worker unticked.
+  fails, write no `out`; the card says why (`sendNote`, in memory, dropped by
+  a mark or a `rev` change; an `out` from an earlier hand-off stays drawn,
+  with its Mark sent, because that hand-off did happen). A refused share or a
+  failed copy shows the text in a sheet whose Copy button is Copy link
+  (`send-copy`, a tap of its own): it writes `out`, closes the sheet, and
+  the row then offers Mark sent. Test gates: share and copy are called
+  synchronously in the handler, a real tap still holds activation at the
+  call, a resolved share marks nothing, and a rejected share (`NotAllowedError`, or a throw)
+  leaves the worker unmarked.
 - **Copy link is a first-class control**, on every part row beside Send,
   always shown. It is `sendPart(wid, n, true)`: the same send, written down
   the same way, copied (the line and the link) inside the tap instead of
   shared. The pilot cannot depend on `navigator.share`.
-- **TEMPORARY: the share sheet test**, a closed `<details>` at the foot of
-  Send (`probeHtml`, `shareProbe`, `PROBES`). Three buttons share a bare short
-  URL, the full link as a bare URL, and the full text as Send does, and print
-  the length, `canShare` and how the promise settled, with its time. It writes
-  and ticks nothing. Remove it, and its tests, once the cause is known.
-- **Sent only when every part is ticked.** Each tick adds what that part
+- **Sent only when every part is marked.** Each mark adds what that part
   carried to `sent[worker].ids` at once (so a tombstone can follow it even
   if the send is never finished) and leaves `at` alone. When the last part
-  is ticked, `at` becomes the time the links were measured and the queue
-  entry goes.
+  is marked, `at` becomes the time the links were measured. **The queue
+  entry stays**, every part marked, so the last mark can still be undone;
+  `sendState()` reads such a queue as sent. It goes, like any queue, when
+  the worker's tasks change.
+- **Send again and Make new links are different actions, and say so.** A
+  marked part's own button is **Send again**: it re-shares that part's
+  stored text now, same `sendId`. **Make new links** (`send-again`,
+  `sendAgain()`) shows only for a worker sent with no queue kept, as a
+  restore leaves them; it sends nothing, but measures fresh links under a
+  new `sendId`, drawn as rows with their own Send. It was labelled "Send
+  again" until Oct 18, beside a row button labelled "Again".
 - Any change to a worker's tasks drops that worker's queue: its links no
   longer say what the list says. The next send is a new send with a new
   `sendId`, and the worker's phone follows the newest.
@@ -434,7 +452,7 @@ The file carries nine of the ten core `EGS-STD:` markers, plus `support`.
 
 ## Tests
 
-`node test_pro.js` — 540 checks, all passing. It serves this folder on
+`node test_pro.js` — 549 checks, all passing. It serves this folder on
 `127.0.0.1:8708` and drives real headless Chrome over CDP on real time.
 `--shots <dir>` also writes screenshots; `--bail` stops at the first failure.
 
@@ -446,7 +464,10 @@ Crew and Jobs (add, edit, sort, archive, bring back, refusals, escaping),
 unsaved typing on every way out of a sheet,
 Day (add, refusals, reorder, reword, reassign, cancel, bring back, restart),
 Send (one part for a realistic list, a worst-case split with every link
-decoded, ticks, a restart mid-queue, backing out of the share sheet, no share
+decoded, no Mark sent before a hand-off, the part label inert under a real
+tap, Mark sent and an Undo that restores the screen and the stored list
+exactly, undoing the last of eight parts, Send again on a marked part
+and Make new links where no links are kept, a restart mid-queue, backing out of the share sheet, no share
 sheet at all, who is marked after each kind of edit, a resend merged on the
 worker's side through the component), each of the three refusals,
 damaged and newer stored data, export and restore round trip with crew, jobs
@@ -480,10 +501,11 @@ Not covered:
   is not new with schema 4 and is not handled. Close other copies of the
   app before updating.
 - **The real share sheet, and a real text message.** The test replaces
-  `navigator.share`. On a live Android phone (Oct 17) Send showed no sheet
-  and still ticked, in Chrome and in the installed app: share resolved
-  without a picker. Why is not yet known (thread `th_nbp_share_gesture`). Whether a link arrives whole and tappable is a phone
-  test.
+  `navigator.share`. On the boss's Android phone (Oct 18) Send opens the
+  share sheet and works; the Oct 17 "sent but nothing sent" reports were
+  the old bare tick circle, not the share. Whether a link arrives whole and
+  tappable is a phone test. The new Mark sent row has not been on a phone
+  yet.
 - The worker's side. Notebuilt cannot open a `#crew=` link yet, so a list
   sent from this build has nowhere to land until that is built. The merge is
   tested through the component, not through Notebuilt.

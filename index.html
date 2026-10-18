@@ -27,7 +27,7 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <!-- EGS-STD:coldopen-version -->
-<script>window.EGS_VERSION = '2026.10.17-1154 (95f7dbf)';</script>
+<script>window.EGS_VERSION = '2026.10.18-0950 (178f39a)';</script>
 <title>Notebuilt Pro</title>
 <meta name="description" content="Task lists for a crew, sent by text. Private, on-device, by EGS.">
 <!-- EGS-STD:themes — this script runs BEFORE the stylesheet so the first paint
@@ -229,11 +229,10 @@
   .task .mv svg{width:18px;height:18px}
   .gone-text{text-decoration:line-through;color:var(--paper-dim)}
   .send-w .grp{margin:0}
-  .part{display:flex;align-items:center;gap:10px;margin-top:10px}
-  .tick{flex:none;width:44px;height:44px;border-radius:50%;border:2px solid var(--line-strong);display:inline-flex;
-    align-items:center;justify-content:center;color:transparent}
-  .tick svg{width:20px;height:20px}
-  .tick[aria-pressed="true"]{background:var(--done);border-color:var(--done);color:var(--ink)}
+  .part{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:10px}
+  .part-btns{display:flex;gap:10px;margin-left:auto}
+  .part-label{color:var(--paper-dim);font-size:14px;white-space:nowrap}
+  .part-out{display:flex;align-items:center;gap:10px;margin-top:6px}
 
   /* ---- Segmented control and switch: fixed boxes, nothing reflows ---- */
   .seg{display:flex;border:1px solid var(--line-strong);border-radius:var(--radius-sm);overflow:hidden}
@@ -1667,16 +1666,19 @@ async function idbClearLists(){
    { listId, createdAt, updatedAt, boss:{id,name}, job:{id,name}, day,
      workers:[{id,name}], tasks:[{id, worker, text, order, editedAt, gone}],
      sent:{ <workerId>:{at, ids:[taskId…]} },
-     queue:{ <workerId>:{sendId, at, parts:[{link, ids:[taskId…], done, out?}]} } }
+     queue:{ <workerId>:{sendId, at, before?, parts:[{link, ids:[taskId…], done, out?}]} } }
 
    workers, tasks and sent are the component's own shapes, and the component
    reads and writes them. `sent` is what each worker has been given: it is
-   what lets a resend carry a tombstone. `queue` is a send that has started
-   and not finished: the exact links, so every part of one send goes out
-   under one sendId even if the app is closed halfway through. A part's
+   what lets a resend carry a tombstone. `queue` is a send that has started:
+   the exact links, so every part of one send goes out under one sendId even
+   if the app is closed halfway through. It stays once every part is marked,
+   so a mark can be undone, and goes when the worker's tasks change. A part's
    `out` is {how:'share'|'copy', at}: the last time it was handed to the
    share sheet or copied. It is a fact about this phone, not a send: `done`
-   is only ever the boss's own tick.
+   is only ever the boss's own Mark sent. `before` is the worker's `sent` as
+   the send started (null for none), so an undone mark puts back exactly
+   what was there. A queue written by an older build has none.
 
    A task is never removed. Cancelling sets gone:'cancelled' and keeps it;
    reassigning changes its worker, and the component turns that into a
@@ -1712,6 +1714,7 @@ function cleanList(o, fromFile){
       const q = o.queue[wid];
       if(!wids.has(wid) || !isObj(q) || typeof q.sendId!=='string' || !SEND_ID_RE.test(q.sendId) || !timeOk(q.at) || q.at<1
          || !Array.isArray(q.parts) || !q.parts.length || q.parts.length>PARTS_MAX) return null;
+      if(q.before!==undefined && q.before!==null && (!isObj(q.before) || !timeOk(q.before.at) || !idList(q.before.ids))) return null;
       const parts = [];
       for(const p of q.parts){
         if(!isObj(p) || typeof p.link!=='string' || p.link.length>EGSCrew.SAFE_LINK_CHARS || p.link.indexOf(EGSCrew.LINK.list)!==0
@@ -1721,7 +1724,8 @@ function cleanList(o, fromFile){
         if(p.out!==undefined) part.out = { how:p.out.how, at:p.out.at };
         parts.push(part);
       }
-      queue[wid] = { sendId:q.sendId, at:q.at, parts:parts };
+      queue[wid] = q.before===undefined ? { sendId:q.sendId, at:q.at, parts:parts }
+        : { sendId:q.sendId, at:q.at, before:q.before ? { at:q.before.at, ids:q.before.ids.slice().sort() } : null, parts:parts };
     }
   }
   return { listId:L.listId, createdAt:o.createdAt, updatedAt:o.updatedAt, boss:L.boss, job:L.job, day:L.day,
@@ -1769,7 +1773,7 @@ function nameRefresh(o){
 }
 function listLive(rec){ return nameRefresh(JSON.parse(JSON.stringify(rec))); }
 /* Put a list down. `quiet` is for a write that changes no task and no name:
-   a tick, or a send being started. */
+   a mark, or a send being started. */
 async function listPut(next, quiet){
   if(listsState!=='ready' || schemaFromFuture) return false;
   const rec = cleanList(next, false);
@@ -1778,10 +1782,10 @@ async function listPut(next, quiet){
   if(old){
     /* A list only grows: a task is cancelled, never removed, and what a
        worker has been given is never forgotten. A write that would drop
-       either is a bug or a wipe. */
+       either is a bug or a wipe. The one exception is an undone Mark sent:
+       it may take back what that same send added, and nothing else. */
     const ids = new Set(rec.tasks.map(t=>t.id));
-    if(old.tasks.some(t=>!ids.has(t.id))
-       || Object.keys(old.sent).some(w=>!rec.sent[w] || old.sent[w].ids.some(i=>rec.sent[w].ids.indexOf(i)<0))){
+    if(old.tasks.some(t=>!ids.has(t.id)) || Object.keys(old.sent).some(w=>sentDropped(old, rec, w))){
       console.warn('Notebuilt Pro: refused a list write that would drop a task or a sent record');
       return false;
     }
@@ -1791,6 +1795,18 @@ async function listPut(next, quiet){
   if(!quiet) rev++;
   if(stampDue()) saveSettings();
   return true;
+}
+function sentDropped(old, rec, w){
+  const oq = old.queue[w], nq = rec.queue[w];
+  const undo = !!(oq && nq && oq.sendId===nq.sendId && nq.before!==undefined && JSON.stringify(oq.before)===JSON.stringify(nq.before));
+  let keep = old.sent[w].ids;
+  if(undo){
+    const mine = new Set(), had = new Set(nq.before ? nq.before.ids : []);
+    oq.parts.forEach(p=>p.ids.forEach(i=>mine.add(i)));
+    keep = keep.filter(i=>had.has(i) || !mine.has(i));
+  }
+  if(!rec.sent[w]) return !undo || keep.length>0;
+  return keep.some(i=>rec.sent[w].ids.indexOf(i)<0);
 }
 /* One list change at a time, each built on the last one written. */
 let _listQ = Promise.resolve();
@@ -1904,9 +1920,12 @@ function sendWorkers(rec){
 }
 /* new — nothing has gone to them. changed — something has, and the list has
    moved since. part — a send has started. sent — they have everything.
-   A worker counts as sent only when every part of the send is ticked. */
+   A worker counts as sent only when every part of the send is marked. A
+   queue with every part marked stays until their tasks change, so nothing
+   has changed since it: they are sent. */
 function sendState(rec, wid){
   const q = rec.queue[wid], s = rec.sent[wid];
+  if(q && q.parts.every(p=>p.done)) return { k:'sent', at:s ? s.at : q.at };
   if(q) return { k:'part', done:q.parts.filter(p=>p.done).length, parts:q.parts.length };
   if(!s || EGSCrew.changesNotSent(rec, wid, rec.sent)) return { k:(s && s.ids.length) ? 'changed' : 'new' };
   return { k:'sent', at:s.at };
@@ -1933,7 +1952,7 @@ function partLabel(name, i, n){ return name+'’s list'+(n>1 ? ', part '+(i+1)+'
    cause. The result waits here until Send is tapped; nothing is stored. */
 const _prep = { key:'', rev:-1, busy:false, by:{}, force:{} };
 /* Why a worker's last Send didn't go. In memory only; shown while the rev it
-   was made under stands and that part is unticked. */
+   was made under stands and that part is unmarked. */
 const sendNote = {};
 function prepFor(stored){
   if(_prep.key===stored.listId && _prep.rev===rev) return;
@@ -2041,7 +2060,8 @@ const HELP_COPY = {
           'Cancelling asks first, and nothing is deleted. You can bring a cancelled task back.'] },
   send:{ title:'Sending',
     body:['Each person gets a private link by text. It holds their tasks and nobody else\u2019s.',
-          'I measure every link before your phone\u2019s share sheet opens. A list too long for one text goes as two or more, and each has its own tick. Someone counts as sent only when every part is ticked.',
+          'I measure every link before your phone\u2019s share sheet opens. A list too long for one text goes as two or more.',
+          'Send or Copy link never marks anything sent, because I can\u2019t see whether the text went. Once a part has gone out, its row says so with a Mark sent button: tap it when you know the text was sent. Undo takes a mistaken mark back. Someone counts as sent only when every part is marked.',
           'If something can\u2019t fit in a link at all, I say what it is here, before anything is sent: one task that\u2019s too long, or names that leave no room.',
           'Sending again after a change adds to what they have. Whatever they\u2019ve marked done, and their notes, stay as they are.',
           'A link isn\u2019t a login. Whoever holds it can act as that person, so send each list only to the person it\u2019s for.'] },
@@ -2580,16 +2600,15 @@ function renderSend(r){
       if(n>1) body += '<div class="sub" style="margin-top:8px">'+esc('Too long for one text, so it goes as '+n+'. Send every part.')+'</div>';
       body += src.parts.map((part,i)=>{
         const label = partLabel(w.name, i, n);
-        /* The queue moves on past a part that has gone out; it still waits for its tick. */
+        /* The queue moves on past a part that has gone out; it still waits for its mark. */
         if(!part.done && !part.out && !next) next = { wid:w.id, n:i, label:label };
         if(!part.done) unticked++;
+        /* The label is only a label. Nothing on this line marks anything sent. */
         return '<div class="part" data-n="'+i+'" data-done="'+(part.done ? '1' : '0')+'" data-out="'+(part.out ? part.out.how : '')+'" data-chars="'+part.link.length+'">'
-          +'<button class="tick" data-action="send-tick"'+tag+' data-n="'+i+'" aria-pressed="'+(part.done ? 'true' : 'false')+'" aria-label="'+esc(label+', sent')+'">'+I.check+'</button>'
-          +'<span class="grow">'+esc(n>1 ? 'Part '+(i+1)+' of '+n : 'One text')+'</span>'
-          +'<button class="btn sm" data-action="send-copy"'+tag+' data-n="'+i+'">Copy link</button>'
-          +'<button class="btn sm" data-action="send-part"'+tag+' data-n="'+i+'">'+(part.done ? 'Again' : 'Send')+'</button></div>'
-          +(part.out && !part.done && !(note && note.n===i) ? '<div class="sub part-out" data-how="'+part.out.how+'">'
-            +esc((part.out.how==='share' ? 'Handed to the share sheet ' : 'Copied ')+sentLabel(part.out.at)+' \u2014 tick when it\u2019s sent')+'</div>' : '');
+          +'<span class="grow part-label">'+esc(n>1 ? 'Part '+(i+1)+' of '+n : 'One text')+'</span>'
+          +'<span class="part-btns"><button class="btn sm" data-action="send-copy"'+tag+' data-n="'+i+'">Copy link</button>'
+          +'<button class="btn sm" data-action="send-part"'+tag+' data-n="'+i+'">'+(part.done ? 'Send again' : 'Send')+'</button></span></div>'
+          +partOut(part, tag, i, label);
       }).join('');
     } else if(p && !p.ok){
       /* Refused before anything is shared, with its own cause (rule 12). */
@@ -2598,7 +2617,10 @@ function renderSend(r){
       body = '<div class="field-msg bad refusal">'+esc(p.reason || EGSCrew.REASONS.invalid)+'</div>'
         +(fix ? '<button class="btn sm" style="margin-top:10px" data-action="send-fix"'+tag+'>'+fix+'</button>' : '');
     } else if(st.k==='sent'){
-      body = '<button class="btn sm" style="margin-top:10px" data-action="send-again"'+tag+'>Send again</button>';
+      /* This phone no longer holds the links it sent, as after a restore. The
+         button sends nothing: it makes fresh links, each with its own Send. */
+      body = '<div class="sub" style="margin-top:8px">The links sent aren\u2019t kept on this phone. To send again, make new ones.</div>'
+        +'<button class="btn sm" style="margin-top:10px" data-action="send-again"'+tag+'>Make new links</button>';
     } else { waiting++; body = '<div class="sub" style="margin-top:8px">Measuring\u2026</div>'; }
     if(note)
       body += '<div class="field-msg '+(note.outcome==='copied' ? 'warn' : 'bad')+' send-note" data-outcome="'+note.outcome+'">'+esc(note.text)+'</div>';
@@ -2609,10 +2631,21 @@ function renderSend(r){
   const top = next ? '<button class="btn primary block" id="send-next" data-action="send-part" data-wid="'+esc(next.wid)+'" data-n="'+next.n+'">'+esc('Send '+next.label)+'</button>'
       +'<div class="sub" id="send-count" style="margin-top:8px">'+esc(sentN+' of '+ws.length+' sent')+'</div>'
     : waiting ? '<div class="card prose">Measuring the links\u2026</div>'
-    : (unticked && !blocked) ? '<div class="card prose" id="send-tickall">'+esc('Everything has gone out. Tick each one once you know it\u2019s sent.')+'</div><div class="sub" id="send-count" style="margin-top:8px">'+esc(sentN+' of '+ws.length+' sent')+'</div>'
+    : (unticked && !blocked) ? '<div class="card prose" id="send-tickall">'+esc('Everything has gone out. Tap Mark sent on each one once you know it\u2019s sent.')+'</div><div class="sub" id="send-count" style="margin-top:8px">'+esc(sentN+' of '+ws.length+' sent')+'</div>'
     : blocked ? '<div class="card prose">Nothing else can go until what\u2019s below is fixed.</div>'
     : '<div class="card prose" id="send-done">Everything is sent.</div>';
-  return head+top+'<div style="margin-top:14px">'+cards+'</div>'+probeHtml()+versionStamp()+'</div>';
+  return head+top+'<div style="margin-top:14px">'+cards+'</div>'+versionStamp()+'</div>';
+}
+/* Under a part: what this phone knows happened to it, and the boss's own
+   mark. There is nothing to mark until the part has been handed to the share
+   sheet or copied, and a mark can always be undone from the same place. */
+function partOut(part, tag, i, label){
+  const how = part.out ? (part.out.how==='share' ? 'Handed to the share sheet ' : 'Copied ')+sentLabel(part.out.at) : '';
+  if(part.done) return '<div class="sub part-out" data-how="'+(part.out ? part.out.how : '')+'"><span class="grow">'+esc((how ? how+'. ' : '')+'Marked sent.')+'</span>'
+    +'<button class="btn sm" data-action="send-unmark"'+tag+' data-n="'+i+'" aria-label="'+esc('Undo marking '+label+' sent')+'">Undo</button></div>';
+  if(!part.out) return '';
+  return '<div class="sub part-out" data-how="'+part.out.how+'"><span class="grow">'+esc(how)+'</span>'
+    +'<button class="btn sm" data-action="send-mark"'+tag+' data-n="'+i+'" aria-label="'+esc('Mark '+label+' sent')+'">Mark sent</button></div>';
 }
 function shareLine(rec, i, n){
   return rec.boss.name+': tasks for '+rec.job.name+', '+dayLabel(rec.day)+(n>1 ? ' (part '+(i+1)+' of '+n+')' : '');
@@ -2626,7 +2659,9 @@ async function queueStart(r, wid){
   if(!p || !p.ok || _prep.busy || _prep.rev!==rev || _prep.key!==stored.listId) return null;
   const why = await listEdit(r.jobId, r.day, rec=>{
     if(rec.queue[wid]) return NOTHING;
-    rec.queue[wid] = { sendId:p.sendId, at:p.at, parts:p.parts.map(x=>({ link:x.link, ids:x.ids, done:false })) };
+    const s = rec.sent[wid];
+    rec.queue[wid] = { sendId:p.sendId, at:p.at, before:s ? { at:s.at, ids:s.ids.slice() } : null,
+      parts:p.parts.map(x=>({ link:x.link, ids:x.ids, done:false })) };
     return null;
   }, true);
   if(why && why!==NOTHING){ toast(why); return null; }
@@ -2638,8 +2673,8 @@ async function queueStart(r, wid){
    message is being written still knows which links belong to this send.
    The sheet is asked for before anything is awaited, because a browser only
    opens it straight from a tap. With copy set it is Copy link: the same
-   send, written down the same way, copied instead of shared. Neither ticks:
-   the tick is only ever the boss's own. */
+   send, written down the same way, copied instead of shared. Neither marks
+   anything sent: only the boss's own Mark sent does. */
 async function sendPart(wid, n, copy){
   const r = routeOf(view); if(r.base!=='send' || !r.jobId) return;
   const stored = listFind(r.jobId, r.day); if(!stored) return;
@@ -2652,7 +2687,7 @@ async function sendPart(wid, n, copy){
   delete sendNote[wid];
   /* Both the share sheet and the clipboard are asked for here, inside the
      tap. Neither may come after an await: a phone refuses them once the tap
-     is spent. Nothing here ticks a part. */
+     is spent. Nothing here marks a part sent. */
   const sharing = (navigator.share && !copy) ? shareStart(text) : null;
   const copying = sharing ? null : clipWrite(text);
   const written = queueStart(r, wid);
@@ -2666,7 +2701,7 @@ async function sendPart(wid, n, copy){
   if(!(await written)){ render(); return; }                  /* it could not be written down, and said so */
   const who = w ? w.name : 'them';
   /* A share that resolves proves nothing: on at least one Android phone it
-     resolves with no picker shown. So nothing here ticks. What the app does
+     resolves with no picker shown. So nothing here marks it. What the app does
      know, that the part was handed over or copied, is written down as that. */
   if(outcome==='shared' || outcome==='copied'){
     const sendId = src.sendId, how = outcome==='shared' ? 'share' : 'copy';
@@ -2678,7 +2713,7 @@ async function sendPart(wid, n, copy){
     }, true);
     if(said && said!==NOTHING) toast(said);
     render();
-    if(how==='copy' && !(said && said!==NOTHING)) toast('Copied. Paste it into a text to '+who+', then tick it.');
+    if(how==='copy' && !(said && said!==NOTHING)) toast('Copied. Paste it into a text to '+who+', then tap Mark sent.');
     return;
   }
   sendNote[wid] = { rev:rev, n:n, outcome:outcome,
@@ -2687,69 +2722,50 @@ async function sendPart(wid, n, copy){
       : 'Not sent. It couldn’t be copied either.' };
   render();
   if(outcome==='closed') return;
-  /* The tap is spent, so the text is shown with a Copy button: that is a tap of its own. */
+  /* The tap is spent, so the text is shown with a Copy button: that is a tap
+     of its own. It is Copy link, so the row then offers Mark sent. */
   sheet('<h2>'+esc(partLabel(w ? w.name : 'Their', n, src.parts.length))+'</h2>'
-    +'<div class="muted" style="font-size:13px;margin-bottom:10px">'+esc(sendNote[wid].text)+' Copy this and send it by text, then tick it:</div>'
+    +'<div class="muted" style="font-size:13px;margin-bottom:10px">'+esc(sendNote[wid].text)+' Copy this and send it by text, then tap Mark sent:</div>'
     +'<div class="card mono" style="font-size:12.5px;word-break:break-all;line-height:1.6">'+esc(text)+'</div>'
-    +'<button class="btn primary block" data-copy="'+esc(text)+'">Copy</button>');
+    +'<button class="btn primary block" data-action="send-copy" data-wid="'+esc(wid)+'" data-n="'+n+'">Copy</button>');
 }
 /* Each returns its promise straight away, still inside the tap. A call that
    throws instead of rejecting is turned into a rejection. */
-function shareStart(text, data){
-  try{ return Promise.resolve(navigator.share(data || { text:text })); }catch(e){ return Promise.reject(e); }
+function shareStart(text){
+  try{ return Promise.resolve(navigator.share({ text:text })); }catch(e){ return Promise.reject(e); }
 }
 function clipWrite(text){
   try{ return Promise.resolve(navigator.clipboard.writeText(text)); }catch(e){ return Promise.reject(e); }
 }
-/* TEMPORARY (th_nbp_share_gesture): which payloads open a share sheet on a
-   given phone. Shares only: it writes nothing and ticks nothing. Remove once
-   the cause is known. */
-const _probe = [];
-const PROBES = { short:'Short URL only', longurl:'Full link as URL only', text:'Full text, as Send does' };
-function probeHtml(){
-  return '<details class="card" id="probe" style="margin-top:14px"><summary>Share sheet test</summary>'
-    +'<p class="sub">Each button opens the share sheet with a different message. Nothing is sent or ticked. Note what each one shows.</p>'
-    +Object.keys(PROBES).map(k=>'<button class="btn sm block" style="margin-top:8px" data-action="share-probe" data-kind="'+k+'">'+esc(PROBES[k])+'</button>').join('')
-    +'<div class="mono" id="probe-out" style="font-size:12.5px;margin-top:10px;word-break:break-word">'+probeLines()+'</div></details>';
+/* What a worker has been given, worked out from their queue: what they had
+   before this send, plus each part marked sent, plus the whole send once
+   every part is. Marking and undoing are the same sum, so an undo puts back
+   exactly what was there. Only for a queue that knows its `before`. */
+function sentAfter(rec, wid){
+  const q = rec.queue[wid], at = q.before ? q.before.at : 0;
+  let sent = q.before ? { [wid]:{ at:q.before.at, ids:q.before.ids.slice() } } : {};
+  q.parts.forEach(p=>{ if(p.done) sent = EGSCrew.recordSend(sent, { tasks:rec.tasks.filter(t=>p.ids.indexOf(t.id)>=0) }, [wid], at); });
+  if(q.parts.every(p=>p.done)) sent = EGSCrew.recordSend(sent, rec, [wid], q.at);
+  return sent[wid] || null;
 }
-function probeLines(){ return _probe.map(x=>esc(x)).join('<br>'); }
-function probeData(kind){
-  if(kind==='short') return { url:location.origin+'/' };
-  const b = document.querySelector('[data-action="send-part"]'), r = routeOf(view);
-  const stored = b && r.jobId ? listFind(r.jobId, r.day) : null; if(!stored) return null;
-  const wid = b.dataset.wid, n = +b.dataset.n, p = _prep.by[wid];
-  const src = stored.queue[wid] || (p && p.ok ? p : null), part = src && src.parts[n];
-  if(!part) return null;
-  return kind==='longurl' ? { url:part.link } : { text:shareLine(listLive(stored), n, src.parts.length)+'\n'+part.link };
-}
-async function shareProbe(kind){
-  const d = probeData(kind), say = line=>{ _probe.push(line); const o = document.getElementById('probe-out'); if(o) o.innerHTML = probeLines(); };
-  if(!d){ say(PROBES[kind]+': no link here to test'); return; }
-  const chars = (d.url || d.text).length, t0 = Date.now();
-  let can = 'n/a';
-  try{ if(navigator.canShare) can = navigator.canShare(d) ? 'yes' : 'no'; }catch(e){ can = e.name; }
-  if(!navigator.share){ say(PROBES[kind]+': no navigator.share'); return; }
-  const sharing = shareStart(null, d);
-  let res;
-  try{ await sharing; res = 'resolved'; }catch(e){ res = 'rejected '+((e && e.name) || 'Error'); }
-  say(PROBES[kind]+' ('+chars+' chars, canShare '+can+'): '+res+' after '+(Date.now()-t0)+' ms');
-}
-/* A tick. What that part carried is recorded as given straight away, so a
-   tombstone can follow it even if the rest of the send never goes. The
-   worker counts as sent, as of the moment the links were measured, only
-   when every part is ticked. */
-async function tickPart(wid, n, flag){
+/* Mark sent, and its Undo. What a marked part carried is recorded as given
+   straight away, so a tombstone can follow it even if the rest of the send
+   never goes. The worker counts as sent, as of the moment the links were
+   measured, only when every part is marked. A part that has not gone out
+   cannot be marked; any part can be unmarked. */
+async function markPart(wid, n, flag){
   const r = routeOf(view); if(r.base!=='send' || !r.jobId) return;
-  if(!(await queueStart(r, wid))) return;
   if(flag) delete sendNote[wid];
   const why = await listEdit(r.jobId, r.day, rec=>{
     const q = rec.queue[wid], part = q && q.parts[n];
-    if(!part || part.done===flag) return NOTHING;
+    if(!part || part.done===flag || (flag && !part.out)) return NOTHING;
     part.done = flag;
-    if(flag){
+    if(q.before!==undefined){ const s = sentAfter(rec, wid); if(s) rec.sent[wid] = s; else delete rec.sent[wid]; }
+    else if(flag){
+      /* A queue an older build started: a mark only adds, and an undo leaves what was given. */
       const was = rec.sent[wid] ? rec.sent[wid].at : 0;
       rec.sent = EGSCrew.recordSend(rec.sent, { tasks:rec.tasks.filter(t=>part.ids.indexOf(t.id)>=0) }, [wid], was);
-      if(q.parts.every(p=>p.done)){ rec.sent = EGSCrew.recordSend(rec.sent, rec, [wid], q.at); delete rec.queue[wid]; }
+      if(q.parts.every(p=>p.done)) rec.sent = EGSCrew.recordSend(rec.sent, rec, [wid], q.at);
     }
     return null;
   }, true);
@@ -3404,9 +3420,9 @@ document.addEventListener('click', function(ev){
   else if(act==='task-down'){ moveTask(el.dataset.id, 1); }
   else if(act==='send-open'){ const r = routeOf(view); if(r.jobId) go('send/'+r.jobId+'/'+r.day); }
   else if(act==='send-part'){ sendPart(el.dataset.wid, +el.dataset.n); }
-  else if(act==='send-copy'){ sendPart(el.dataset.wid, +el.dataset.n, true); }
-  else if(act==='share-probe' && PROBES[el.dataset.kind]){ shareProbe(el.dataset.kind); }
-  else if(act==='send-tick'){ tickPart(el.dataset.wid, +el.dataset.n, el.getAttribute('aria-pressed')!=='true'); }
+  else if(act==='send-copy'){ sendPart(el.dataset.wid, +el.dataset.n, true); if(el.closest('.sheet')) closeSheet(true); }
+  else if(act==='send-mark'){ markPart(el.dataset.wid, +el.dataset.n, true); }
+  else if(act==='send-unmark'){ markPart(el.dataset.wid, +el.dataset.n, false); }
   else if(act==='send-again'){ sendAgain(el.dataset.wid); }
   else if(act==='send-fix'){ sendFix(el.dataset.wid); }
   else if(act==='theme'){ setTheme(el.dataset.mode); render(); toast('Look: '+THEME_LABEL[themeMode()]); }

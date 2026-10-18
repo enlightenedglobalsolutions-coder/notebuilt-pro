@@ -201,7 +201,7 @@ async function run(){
     await until('!!document.getElementById("sheet-root").innerHTML', 3000, 'task sheet'); };
   // {name: state} for every worker heading on the Day screen, or every card on Send.
   const dayStates = () => ev('JSON.stringify(Array.prototype.map.call(document.querySelectorAll("#day-body .grp[data-wid]"),function(g){return [g.querySelector(".who").textContent,g.querySelector(".pill").dataset.state]}))').then(a => Object.fromEntries(JSON.parse(a)));
-  const cards = () => ev('JSON.stringify(Array.prototype.map.call(document.querySelectorAll(".send-w"),function(c){return {name:c.querySelector(".who").textContent,state:c.dataset.state,refused:c.dataset.refused||"",pill:c.querySelector(".pill").textContent,parts:Array.prototype.map.call(c.querySelectorAll(".part"),function(p){var o=p.nextElementSibling;return {done:p.dataset.done==="1",chars:+p.dataset.chars,out:p.dataset.out,outText:o&&o.classList.contains("part-out")?o.textContent:""}}),note:(c.querySelector(".send-note")||{dataset:{}}).dataset.outcome||"",text:c.textContent,fix:!!c.querySelector("[data-action=send-fix]"),again:!!c.querySelector("[data-action=send-again]")}}))').then(JSON.parse);
+  const cards = () => ev('JSON.stringify(Array.prototype.map.call(document.querySelectorAll(".send-w"),function(c){return {name:c.querySelector(".who").textContent,state:c.dataset.state,refused:c.dataset.refused||"",pill:c.querySelector(".pill").textContent,parts:Array.prototype.map.call(c.querySelectorAll(".part"),function(p){var o=p.nextElementSibling;o=o&&o.classList.contains("part-out")?o:null;return {done:p.dataset.done==="1",chars:+p.dataset.chars,out:p.dataset.out,outText:o?o.querySelector(".grow").textContent:"",mark:!!(o&&o.querySelector("[data-action=send-mark]")),undo:!!(o&&o.querySelector("[data-action=send-unmark]"))}}),note:(c.querySelector(".send-note")||{dataset:{}}).dataset.outcome||"",text:c.textContent,fix:!!c.querySelector("[data-action=send-fix]"),again:!!c.querySelector("[data-action=send-again]")}}))').then(JSON.parse);
   const card = async name => (await cards()).find(c => c.name === name);
   const measured = () => until('!!document.querySelector(".send-w") && !/Measuring/.test(document.getElementById("app").textContent)', 20000, 'links measured');
   const inCard = (name, sel) => ev('(function(n){var c=Array.prototype.filter.call(document.querySelectorAll(".send-w"),function(e){return e.querySelector(".who").textContent===n})[0];var b=c&&c.querySelector(' + q(sel) + ');if(!b)throw new Error("nothing matching ' + sel.replace(/"/g, "'") + ' for "+n);b.click();return true})(' + q(name) + ')');
@@ -226,16 +226,18 @@ async function run(){
   const scriptText = (from, span, n) => Array.from({ length:n }, () => String.fromCodePoint(from + Math.floor(rnd() * span))).join('');
   const cyr = n => scriptText(0x430, 32, n), han = n => scriptText(0x4E00, 20000, n), rare = n => scriptText(0x20000, 42719, n);
 
-  // Send the next part, wait for it to be handed over, then tick it by hand: Send itself never ticks.
+  // Mark sent sits under its part, in the row that says how it went out.
+  const MARK = ' + .part-out [data-action="send-mark"]', UNMARK = ' + .part-out [data-action="send-unmark"]';
+  // Send the next part, wait for it to be handed over, then mark it sent by hand: Send itself never does.
   const sendOne = async () => { const b = JSON.parse(await ev('(function(){var b=document.getElementById("send-next");return JSON.stringify({wid:b.dataset.wid,n:b.dataset.n})})()'));
     const sel = '.send-w[data-wid="' + b.wid + '"] .part[data-n="' + b.n + '"]';
     await click('#send-next'); await until('(function(){var p=document.querySelector(' + q(sel) + ');return !!(p&&p.dataset.out)})()', 6000, 'handed to the share sheet');
-    await click(sel + ' .tick'); await until('(function(){var p=document.querySelector(' + q(sel) + ');return !p||p.dataset.done==="1"})()', 6000, 'ticked by hand'); };
+    await click(sel + MARK); await until('(function(){var p=document.querySelector(' + q(sel) + ');return !p||p.dataset.done==="1"})()', 6000, 'marked by hand'); };
   // The same from a worker's own card: their first part.
   const sendIn = async name => { const w = await ev('(function(n){return Array.prototype.filter.call(document.querySelectorAll(".send-w"),function(e){return e.querySelector(".who").textContent===n})[0].dataset.wid})(' + q(name) + ')');
     const sel = '.send-w[data-wid="' + w + '"] .part[data-n="0"]';
     await inCard(name, '[data-action="send-part"]'); await until('(function(){var p=document.querySelector(' + q(sel) + ');return !!(p&&p.dataset.out)})()', 6000, name + ' handed over');
-    await click(sel + ' .tick'); await until('(function(){var p=document.querySelector(' + q(sel) + ');return !p||p.dataset.done==="1"})()', 6000, name + ' ticked'); };
+    await click(sel + MARK); await until('(function(){var p=document.querySelector(' + q(sel) + ');return !p||p.dataset.done==="1"})()', 6000, name + ' marked'); };
   const sendAll = async () => { for(let i = 0; i < 80; i++){ const t = await text('#send-next'); if(t === null) break; await sendOne();
       await until('(function(){var b=document.getElementById("send-next");return !b||b.textContent!==' + q(t) + '})()', 6000, 'the queue to move past ' + t); }
     await until('!!document.getElementById("send-done")', 6000, 'everything sent'); };
@@ -859,28 +861,25 @@ async function run(){
   ok(!(await overflow()), 'Send: no horizontal scroll at 320px', await overflow());
   ok((await ev('Array.prototype.every.call(document.querySelectorAll(".send-w .part"),function(p){var b=p.querySelectorAll("button.btn");return b.length===2&&b[0].dataset.action==="send-copy"&&b[0].textContent==="Copy link"&&b[1].dataset.action==="send-part"})&&document.querySelectorAll(".send-w .part").length===2')),
     'every part row has Copy link beside Send, before anything has failed');
-  // TEMPORARY share sheet test (th_nbp_share_gesture): three payloads, inside the tap, nothing written.
-  { const b4 = JSON.stringify(await one()), link = await ev('_prep.by[' + q(sw('Joe')) + '].parts[0].link');
-    await ev('document.getElementById("probe").open=true,window.__shareMeta=[],true');
-    for(const k of ['short', 'longurl', 'text']) await tapSync('[data-action="share-probe"][data-kind="' + k + '"]');
-    await until('document.getElementById("probe-out").innerHTML.split("<br>").length===3', 4000, 'probe lines');
-    const sh = await shares(), m = JSON.parse(await ev('JSON.stringify(window.__shareMeta)'));
-    ok(sh.length === 3 && JSON.stringify(sh[0]) === JSON.stringify({ url:URL0.replace(/[^/]*$/, '') }) && JSON.stringify(sh[1]) === JSON.stringify({ url:link }) && Object.keys(sh[2]).join() === 'text' && linkOf(sh[2]) === link,
-      'the share test sends a bare short URL, the full link as a bare URL, and the full text as Send does', JSON.stringify(sh).slice(0, 300));
-    ok(m.length === 3 && m.every(x => x.sync), 'each share-test payload is shared synchronously inside the tap', JSON.stringify(m));
-    ok(/Short URL only \(\d+ chars, canShare [^)]+\): resolved after \d+ ms/.test(await text('#probe-out')), 'and each result is written on screen, with its length and time', await text('#probe-out'));
-    await ev('window.__shareFail="NotAllowedError",true'); await tapSync('[data-action="share-probe"][data-kind="short"]'); await sleep(200); await ev('window.__shareFail=null,true');
-    ok(/rejected NotAllowedError/.test(await text('#probe-out')), 'a refused test share shows its error name');
-    ok(b4 === JSON.stringify(await one()) && (await cards()).every(c => c.state === 'new' && c.parts.every(p => !p.done)), 'the share test wrote nothing and ticked nothing');
-    await ev('window.__shares=[],window.__shareMeta=[],true'); }
+  ok(!(await ev('!!document.getElementById("probe")||!!document.querySelector("[data-action=share-probe]")||typeof shareProbe!=="undefined"')), 'the temporary share sheet test is gone');
+  // GATE (th_nbp_tick_affordance): nothing that marks a part sent until it has gone out.
+  ok((await ev('document.querySelectorAll(".tick,[data-action=send-mark],[data-action=send-unmark],[data-action=send-tick]").length')) === 0, 'GATE: before any Send or Copy link there is no Mark sent, and no bare circle, anywhere on Send');
+  { const lab = JSON.parse(await ev('JSON.stringify(Array.prototype.map.call(document.querySelectorAll(".send-w .part .part-label"),function(e){return {t:e.textContent,tag:e.tagName,ctl:!!e.closest("button,a,[data-action],[role=button],[tabindex]")}}))'));
+    ok(lab.length === 2 && lab.every(l => l.t === 'One text' && l.tag === 'SPAN' && !l.ctl), '"One text" is a plain label, not a control and inside none', JSON.stringify(lab)); }
+  { const b4 = JSON.stringify(await one()), app4 = await ev('document.getElementById("app").innerHTML');
+    await ev('window.__shareMeta=[],window.__clip=null,true');
+    await realTap('.send-w[data-wid="' + sw('Joe') + '"] .part-label'); await sleep(400);
+    ok(b4 === JSON.stringify(await one()) && app4 === (await ev('document.getElementById("app").innerHTML')) && (await shares()).length === 0 && (await ev('window.__shareMeta.length')) === 0 && (await ev('window.__clip')) === null,
+      'GATE: tapping the parts label does nothing: no share, no copy, nothing written, the screen unchanged'); }
   await shot('21-send-dark-320');
   await click('#send-next'); await until('document.querySelector(".send-w .part").dataset.out==="share"', 5000, 'Joe handed over');
   let sh = await shares();
   { const c = await card('Joe'), M = await one();
     ok(c.state === 'part' && !c.parts[0].done && c.pill === 'Not sent' && !M.sent[sw('Joe')] && M.queue[sw('Joe')].parts[0].done === false && M.queue[sw('Joe')].parts[0].out.how === 'share',
-      'GATE: a share that resolves ticks nothing, and nothing is recorded as sent', JSON.stringify(c));
-    ok(/^Handed to the share sheet \S.* \u2014 tick when it\u2019s sent$/.test(c.parts[0].outText) && c.parts[0].outText.indexOf(await ev('sentLabel(' + M.queue[sw('Joe')].parts[0].out.at + ')')) > 0,
-      'Joe\u2019s row says what the app knows: handed to the share sheet, at what time, tick when it\u2019s sent', c.parts[0].outText);
+      'GATE: a share that resolves marks nothing sent, and nothing is recorded as sent', JSON.stringify(c));
+    ok(/^Handed to the share sheet \S/.test(c.parts[0].outText) && c.parts[0].outText.indexOf(await ev('sentLabel(' + M.queue[sw('Joe')].parts[0].out.at + ')')) > 0 && c.parts[0].mark && !c.parts[0].undo,
+      'Joe\u2019s row says what the app knows, handed to the share sheet and when, with a worded Mark sent beside it', c.parts[0].outText);
+    ok((await ev('(function(){var b=document.querySelector(' + q('.send-w[data-wid="' + sw('Joe') + '"] .part' + MARK) + ');return b.tagName==="BUTTON"&&b.textContent==="Mark sent"})()')) && (await ev('!document.querySelector(".tick")')), 'the control says Mark sent in words; there is no bare circle');
     ok((await text('#send-count')) === '0 of 2 sent' && (await text('#send-next')) === 'Send Maria\u2019s list', 'the count stays 0 of 2, and the queue moves on to Maria', await text('#send-count')); }
   { const r = JSON.parse(await ev('(function(){var L=lists[0],w=Object.keys(L.queue)[0],f=function(v){var c=JSON.parse(JSON.stringify(L));if(v===undefined)delete c.queue[w].parts[0].out;else c.queue[w].parts[0].out=v;var k=cleanList(c);return k?JSON.stringify(k.queue[w].parts[0].out||null):"refused"};'
       + 'return JSON.stringify([f(L.queue[w].parts[0].out),f(undefined),f({how:"sms",at:1790000000}),f({how:"share"}),f({how:"copy",at:-5}),f("share"),f({how:"copy",at:1790000000,x:1})])})()'));
@@ -888,8 +887,14 @@ async function run(){
       'a stored part\u2019s out is judged: share or copy with a good time, or absent; anything else refuses the list, and unknown keys are dropped', JSON.stringify(r)); }
   await toSend();
   ok((await card('Joe')).parts[0].out === 'share' && /^Handed to the share sheet/.test((await card('Joe')).parts[0].outText), 'reopened, the row still says it was handed over');
-  await inCard('Joe', '.tick'); await until('document.querySelector(".send-w").dataset.state==="sent"', 5000, 'Joe ticked');
-  ok((await text('#send-count')) === '1 of 2 sent', 'only the boss\u2019s tick makes Joe sent', await text('#send-count'));
+  // GATE: a mark can be undone from the same row, and the undo puts back exactly what was there.
+  { const B4 = await one(), app4 = await ev('document.getElementById("app").innerHTML'), bare = l => JSON.stringify(Object.assign({}, l, { updatedAt:0 }));
+    await inCard('Joe', '.part' + MARK); await until('document.querySelector(".send-w").dataset.state==="sent"', 5000, 'Joe marked');
+    const c = await card('Joe');
+    ok((await text('#send-count')) === '1 of 2 sent' && c.parts[0].done && c.parts[0].undo && !c.parts[0].mark && /^Handed to the share sheet \S.*\. Marked sent\.$/.test(c.parts[0].outText), 'only the boss\u2019s Mark sent makes Joe sent, and the row then offers Undo', JSON.stringify(c));
+    await inCard('Joe', '.part' + UNMARK); await until('document.querySelector(".send-w").dataset.state==="part"', 5000, 'Joe unmarked');
+    ok(bare(await one()) === bare(B4) && app4 === (await ev('document.getElementById("app").innerHTML')), 'GATE: Undo restores the row exactly: the same screen, and the same stored list, sent map and all', bare(await one()).slice(0, 200));
+    await inCard('Joe', '.part' + MARK); await until('document.querySelector(".send-w").dataset.state==="sent"', 5000, 'Joe marked again'); }
   const JOE1 = linkOf(sh[0]);
   ok(sh.length === 1 && Object.keys(sh[0]).join() === 'text' && sh[0].text.split('\n')[0] === 'Mike: tasks for Oak St reno, ' + (await ev('dayLabel(' + q(today) + ')')), 'the share sheet gets one line saying whose tasks, for which job and day', sh[0].text.split('\n')[0]);
   ok(JOE1.indexOf('https://notebuilt.ca/#crew=') === 0 && JOE1.length === cs[0].parts[0].chars && JOE1.length <= 700, 'and the link that was measured, ' + JOE1.length + ' characters');
@@ -899,15 +904,19 @@ async function run(){
     ok(JSON.stringify(v).indexOf('Prime bedroom') < 0 && JSON.stringify(v).indexOf(sw('Maria')) < 0, 'and nothing of Maria\u2019s');
     ok(v.listId === (await one()).listId && v.boss.id === bossS.id && v.job.id === jobS.id && v.day === today && v.part === 1 && v.parts === 1, 'it carries the list\u2019s ID, the boss, the job and the day, as part 1 of 1'); }
   { const M = await one(), s = M.sent[sw('Joe')];
-    ok(s && s.ids.length === 10 && s.at >= NOW - 5 && !M.queue[sw('Joe')] && !M.sent[sw('Maria')], 'the sent map records what Joe was given and when; Maria has nothing recorded', JSON.stringify(M.sent)); }
-  ok((await text('#send-next')) === 'Send Maria\u2019s list' && (await card('Joe')).again && (await card('Joe')).parts.length === 0, 'the queue moves on to the next worker, and Joe is offered Send again');
+    ok(s && s.ids.length === 10 && s.at >= NOW - 5 && M.queue[sw('Joe')].parts.every(p => p.done) && !M.sent[sw('Maria')], 'the sent map records what Joe was given and when; Maria has nothing recorded', JSON.stringify(M.sent)); }
+  { const c = await card('Joe');
+    ok((await text('#send-next')) === 'Send Maria\u2019s list' && c.parts.length === 1 && c.parts[0].done && c.parts[0].undo, 'the queue moves on to the next worker, and Joe\u2019s row stays, marked sent, so the mark can still be undone', JSON.stringify(c)); }
   ok((await text('#send-count')) === '1 of 2 sent', 'and the queue says how far through it is', await text('#send-count'));
   // The share sheet opens and never comes back: the phone closed the app behind it.
   await ev('window.__shareFail="hang",true'); await click('#send-next'); await sleep(500);
   { const M = await one(), qm = M.queue[sw('Maria')];
     ok(qm && qm.parts.length === 1 && qm.parts[0].done === false && !M.sent[sw('Maria')], 'the send is written down while the share sheet is still open', JSON.stringify(M.queue));
     await toSend(); const c = await card('Maria');
-    ok(c.state === 'part' && c.parts.length === 1 && !c.parts[0].done && (await one()).queue[sw('Maria')].parts[0].link === qm.parts[0].link && (await text('#send-next')) === 'Send Maria\u2019s list', 'reopened, Maria\u2019s part is there unticked, the same link, ready to send or tick'); }
+    ok(c.state === 'part' && c.parts.length === 1 && !c.parts[0].done && (await one()).queue[sw('Maria')].parts[0].link === qm.parts[0].link && (await text('#send-next')) === 'Send Maria\u2019s list', 'reopened, Maria\u2019s part is there unticked, the same link, ready to send');
+    ok(!c.parts[0].mark && !c.parts[0].out && (await ev('document.querySelectorAll(' + q('.send-w[data-wid="' + sw('Maria') + '"] [data-action=send-mark]') + ').length')) === 0, 'GATE: a send that never came back from the share sheet offers no Mark sent', JSON.stringify(c));
+    const b4 = JSON.stringify(await one()); await ev('markPart(' + q(sw('Maria')) + ',0,true)');
+    ok(JSON.stringify(await one()) === b4, 'and marking it anyway, from the code, writes nothing: a part that has not gone out cannot be marked'); }
   // Backing out of the share sheet is not a send.
   await ev('window.__shareFail="AbortError",true'); await click('#send-next'); await sleep(400);
   { const M = await one(), c = await card('Maria');
@@ -922,6 +931,7 @@ async function run(){
   { const m = JSON.parse(await ev('JSON.stringify(window.__shareMeta)'));
     ok(m[1].active === true, 'GATE: on a real tap the page still holds user activation when share is called', JSON.stringify(m)); }
   await sleep(300);
+  await ev('window.__clipSync=null,Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:function(t){window.__clipSync=!!window.__inTap;window.__clip=t;return Promise.resolve()}}}),true');
   // GATE: a share the phone refuses, or one that throws, is not a send.
   for(const fail of ['NotAllowedError', 'throw']){
     await ev('window.__shareFail=' + q(fail) + ',true'); await click('#send-next');
@@ -929,21 +939,25 @@ async function run(){
     const M = await one(), c = await card('Maria');
     ok(c.state === 'part' && !c.parts[0].done && c.pill === 'Not sent' && c.note === 'refused' && !M.sent[sw('Maria')] && M.queue[sw('Maria')].parts[0].done === false && (await shares()).length === 0,
       'GATE: a rejected share (' + fail + ') leaves Maria unticked, and her row says it did not go', JSON.stringify(c));
-    ok(/wouldn\u2019t open the share sheet/.test(await sheetText()) && (await ev('!!document.querySelector("#sheet-root [data-copy]")')), 'and the text is shown with a Copy button, which is a tap of its own');
-    await ev('closeSheet(),true'); await sleep(200);
+    ok(/wouldn\u2019t open the share sheet/.test(await sheetText()) && /then tap Mark sent/.test(await sheetText()) && (await ev('!!document.querySelector("#sheet-root [data-action=send-copy]")')) && !c.parts[0].mark, 'and the text is shown with a Copy button, which is a tap of its own; nothing can be marked yet');
+    if(fail === 'NotAllowedError'){ await ev('closeSheet(),true'); await sleep(200); continue; }
+    await ev('window.__shareFail=null,window.__clip=null,true'); await tapSync('#sheet-root [data-action="send-copy"]');
+    await until('!document.getElementById("sheet-root").innerHTML && !!document.querySelector(' + q('.send-w[data-wid="' + sw('Maria') + '"] .part[data-out="copy"]') + ')', 4000, 'copied from the sheet');
+    const c2 = await card('Maria');
+    ok((await ev('window.__clipSync')) === true && /\n/.test(await ev('window.__clip')) && c2.parts[0].mark && !c2.parts[0].done && /^Copied /.test(c2.parts[0].outText), 'Copy in that sheet copies inside its own tap, closes it, and the row then offers Mark sent', JSON.stringify(c2));
   }
-  // Copy link: the same send, copied inside the tap, never shared and never ticked.
-  await ev('window.__shareMeta=[],window.__clipSync=null,Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:function(t){window.__clipSync=!!window.__inTap;window.__clip=t;return Promise.resolve()}}}),true');
+  // Copy link: the same send, copied inside the tap, never shared and never marked sent.
+  await ev('window.__shareMeta=[],window.__clipSync=null,true');
   await tapSync('.send-w[data-wid="' + sw('Maria') + '"] [data-action="send-copy"]');
   await until('/Copied\\. Paste it into a text to Maria/.test(document.getElementById("toast").textContent)', 4000, 'copy link');
   { const c = await card('Maria'), M = await one();
     ok((await ev('window.__clipSync')) === true && (await ev('window.__shareMeta.length')) === 0, 'Copy link copies inside the tap and never opens the share sheet');
-    ok((await ev('window.__clip')) === 'Mike: tasks for Oak St reno, ' + (await ev('dayLabel(' + q(M.day) + ')')) + '\n' + M.queue[sw('Maria')].parts[0].link && !c.parts[0].done && c.parts[0].out === 'copy' && /^Copied \S.* \u2014 tick when it\u2019s sent$/.test(c.parts[0].outText) && !M.sent[sw('Maria')], 'it copies the line and Maria\u2019s queued link, ticks nothing, and the row says Copied, tick when it\u2019s sent', JSON.stringify(c));
-    ok((await text('#send-next')) === null && /Everything has gone out\. Tick each one/.test(await text('#send-tickall')) && (await text('#send-count')) === '1 of 2 sent' && !(await ev('!!document.getElementById("send-done")')),
-      'with every part handed over and one unticked, the screen asks for ticks, the count stays 1 of 2, and it does not say everything is sent', await text('#app')); }
-  await ev('window.__shareFail=null,true'); await inCard('Maria', '.tick');
+    ok((await ev('window.__clip')) === 'Mike: tasks for Oak St reno, ' + (await ev('dayLabel(' + q(M.day) + ')')) + '\n' + M.queue[sw('Maria')].parts[0].link && !c.parts[0].done && c.parts[0].out === 'copy' && /^Copied \S/.test(c.parts[0].outText) && c.parts[0].mark && !M.sent[sw('Maria')], 'it copies the line and Maria\u2019s queued link, marks nothing, and the row says Copied, with Mark sent', JSON.stringify(c));
+    ok((await text('#send-next')) === null && /Everything has gone out\. Tap Mark sent on each one/.test(await text('#send-tickall')) && (await text('#send-count')) === '1 of 2 sent' && !(await ev('!!document.getElementById("send-done")')),
+      'with every part handed over and one unmarked, the screen asks for Mark sent, the count stays 1 of 2, and it does not say everything is sent', await text('#app')); }
+  await ev('window.__shareFail=null,true'); await inCard('Maria', '.part' + MARK);
   await until('!!document.getElementById("send-done")', 5000, 'everything sent');
-  ok((await cards()).every(c => c.state === 'sent') && JSON.stringify((await one()).queue) === '{}', 'when every worker is ticked the screen says everything is sent');
+  ok((await cards()).every(c => c.state === 'sent') && Object.values((await one()).queue).every(x => x.parts.every(p => p.done)), 'when every worker is marked the screen says everything is sent');
   await ev('history.back()'); await until('location.hash===' + q(DAYS), 4000, 'day');
   ok(JSON.stringify(await dayStates()) === JSON.stringify({ Joe:'sent', Maria:'sent' }) && /Everything is sent/.test(await text('#day-status')), 'and the Day screen agrees');
 
@@ -955,12 +969,12 @@ async function run(){
   let z = await card('Zed');
   ok(z.parts.length >= 2 && z.parts.every(p => p.chars <= 700), 'a worst-case list splits: ' + z.parts.length + ' parts, the longest ' + Math.max.apply(null, z.parts.map(p => p.chars)) + ' characters, every one within 700', JSON.stringify(z.parts));
   ok(new RegExp('goes as ' + z.parts.length + '\\.').test(z.text) && (await text('#send-next')) === 'Send Zed\u2019s list, part 1 of ' + z.parts.length, 'the part count is shown before anything is sent', await text('#send-next'));
-  ok((await card('Joe')).state === 'sent' && (await card('Maria')).state === 'sent' && JSON.stringify((await one()).queue) === '{}', 'the others stay sent');
+  ok((await card('Joe')).state === 'sent' && (await card('Maria')).state === 'sent' && Object.values((await one()).queue).every(x => x.parts.every(p => p.done)), 'the others stay sent');
   await shot('22-send-parts-dark-320');
-  await sendOne(); await until('(function(){var p=document.querySelector(".part");return p&&p.dataset.done==="1"})()', 5000, 'part 1 ticked');
+  await sendOne(); await until('(function(){var p=document.querySelector(".part");return p&&p.dataset.done==="1"})()', 5000, 'part 1 marked');
   const QZ = (await one()).queue[sw('Zed')], NP = QZ.parts.length;
   { const M = await one(), s = M.sent[sw('Zed')]; z = await card('Zed');
-    ok(z.state === 'part' && z.pill === '1 of ' + NP + ' sent' && z.parts[0].done && z.parts.slice(1).every(p => !p.done), 'part 1 has its own tick, and Zed shows as part sent');
+    ok(z.state === 'part' && z.pill === '1 of ' + NP + ' sent' && z.parts[0].done && z.parts.slice(1).every(p => !p.done), 'part 1 has its own Mark sent, and Zed shows as part sent');
     ok(s && s.at === 0 && s.ids.join() === QZ.parts[0].ids.slice().sort().join() && s.ids.length < 8, 'what part 1 carried is recorded as given, but Zed is not recorded as sent', JSON.stringify(s));
     ok(QZ.parts.every(p => p.link.length <= 700) && QZ.parts.length === NP && (await text('#send-next')) === 'Send Zed\u2019s list, part 2 of ' + NP, 'the queue holds every link of this send and moves to part 2'); }
   { const got = []; for(const p of QZ.parts) got.push(await decode(p.link));
@@ -975,18 +989,28 @@ async function run(){
   await toSend();
   ok(JSON.stringify(await one()) === MID, 'a cold restart mid-queue keeps the sent map and the queue, byte for byte');
   z = await card('Zed');
-  ok(z.state === 'part' && z.parts.length === NP && z.parts[0].done && z.parts.slice(1).every(p => !p.done) && (await text('#send-next')) === 'Send Zed\u2019s list, part 2 of ' + NP, 'and the screen comes back with part 1 ticked and part 2 next', JSON.stringify(z.parts));
-  await inCard('Zed', '.part[data-n="0"] .tick'); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part') + ').dataset.done==="0"', 4000, 'unticked');
-  ok((await one()).queue[sw('Zed')].parts[0].done === false && (await card('Zed')).pill === 'Not sent', 'a tick can be taken back if the text did not go');
-  await inCard('Zed', '.part[data-n="0"] .tick'); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part') + ').dataset.done==="1"', 4000, 'ticked again');
+  ok(z.state === 'part' && z.parts.length === NP && z.parts[0].done && z.parts.slice(1).every(p => !p.done) && (await text('#send-next')) === 'Send Zed\u2019s list, part 2 of ' + NP, 'and the screen comes back with part 1 marked and part 2 next', JSON.stringify(z.parts));
+  await inCard('Zed', '.part[data-n="0"]' + UNMARK); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part') + ').dataset.done==="0"', 4000, 'unmarked');
+  { const M = await one(), z0 = (await card('Zed')).parts[0];
+    ok(M.queue[sw('Zed')].parts[0].done === false && !M.sent[sw('Zed')] && (await card('Zed')).pill === 'Not sent' && z0.mark && /^Handed to the share sheet \S/.test(z0.outText),
+      'a mark can be undone if the text did not go: what part 1 recorded as given goes too, and the row offers Mark sent again', JSON.stringify(M.sent)); }
+  await inCard('Zed', '.part[data-n="0"]' + MARK); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part') + ').dataset.done==="1"', 4000, 'marked again');
+  ok(JSON.stringify((await one()).sent) === JSON.stringify(JSON.parse(MID).sent), 'marked again, the sent map is what it was before the undo');
   await ev('window.__shares=[],true');
   for(let i = 1; i < NP; i++){ await sendOne(); await until('document.querySelectorAll(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part[data-done="1"]') + ').length===' + (i + 1) + ' || document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"]') + ').dataset.state==="sent"', 5000, 'part ' + (i + 1));
-    if(i < NP - 1 && (await card('Zed')).state === 'sent') ok(false, 'Zed counts as sent only when every part is ticked', 'sent after part ' + (i + 1) + ' of ' + NP); }
+    if(i < NP - 1 && (await card('Zed')).state === 'sent') ok(false, 'Zed counts as sent only when every part is marked', 'sent after part ' + (i + 1) + ' of ' + NP); }
   await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"]') + ').dataset.state==="sent"', 5000, 'Zed sent');
   sh = await shares();
   ok(sh.length === NP - 1 && sh.every((s, i) => linkOf(s) === QZ.parts[i + 1].link && new RegExp('\\(part ' + (i + 2) + ' of ' + NP + '\\)$').test(s.text.split('\n')[0])), 'after the restart the remaining parts go out as the SAME send, each labelled with its part');
   { const M = await one(), s = M.sent[sw('Zed')];
-    ok(s.at === QZ.at && s.at > 0 && s.ids.length === 8 && !M.queue[sw('Zed')] && !!(await ev('!!document.getElementById("send-done")')), 'Zed counts as sent only once every part is ticked, as of when the links were measured'); }
+    ok(s.at === QZ.at && s.at > 0 && s.ids.length === 8 && M.queue[sw('Zed')].parts.every(p => p.done) && !!(await ev('!!document.getElementById("send-done")')), 'Zed counts as sent only once every part is marked, as of when the links were measured'); }
+  // Undoing the last mark takes Zed back to part sent, with exactly the sent map he had before it.
+  { const all = JSON.stringify((await one()).sent);
+    await inCard('Zed', '.part[data-n="' + (NP - 1) + '"]' + UNMARK); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"]') + ').dataset.state==="part"', 4000, 'last unmarked');
+    const M = await one(), s = M.sent[sw('Zed')], want = [].concat.apply([], QZ.parts.slice(0, NP - 1).map(p => p.ids)).sort();
+    ok(s.at === 0 && s.ids.join() === want.join() && (await card('Zed')).pill === (NP - 1) + ' of ' + NP + ' sent' && (await text('#send-tickall')) !== null, 'undoing the last mark makes Zed part sent again, with only what the other parts carried recorded', JSON.stringify(s));
+    await inCard('Zed', '.part[data-n="' + (NP - 1) + '"]' + MARK); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"]') + ').dataset.state==="sent"', 4000, 'last marked again');
+    ok(JSON.stringify((await one()).sent) === all, 'and marking it again gives back the same sent map, byte for byte'); }
 
   // An edit after sending marks the right workers and no others.
   await toDay();
@@ -1028,7 +1052,7 @@ async function run(){
       + 'await listEdit(job,day,function(r,n){return taskChange(r,n,a[0].id,"once",wid)});await listEdit(job,day,function(r,n){return taskChange(r,n,a[0].id,"twice",wid)});'
       + 'var edited=lists[0].tasks.find(function(t){return t.id===a[0].id}).editedAt;render();'
       + 'for(var i=0;i<200&&(_prep.busy||!_prep.by[wid]);i++)await new Promise(function(r){setTimeout(r,25)});'
-      + 'var n=_prep.by[wid].parts.length;for(var p=0;p<n;p++){await sendPart(wid,p);await tickPart(wid,p,true)}var afterSend=sendState(lists[0],wid).k,at=lists[0].sent[wid].at;'
+      + 'var n=_prep.by[wid].parts.length;for(var p=0;p<n;p++){await sendPart(wid,p);await markPart(wid,p,true)}var afterSend=sendState(lists[0],wid).k,at=lists[0].sent[wid].at;'
       + 'await listEdit(job,day,function(r,n){return taskChange(r,n,a[1].id,"later",wid)});'
       + 'return JSON.stringify({now:Math.floor(T/1000),edited:edited,at:at,afterSend:afterSend,afterEdit:sendState(lists[0],wid).k,second:lists[0].tasks.find(function(t){return t.id===a[1].id}).editedAt})'
       + '}finally{Date.now=real}})(' + q(jobS.id) + ',' + q(today) + ',' + q(sw('Zed')) + ')'));
@@ -1038,25 +1062,31 @@ async function run(){
   await toSend();
   await ev('navigator.share=undefined,Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:function(t){window.__clip=t;return Promise.resolve()}}}),true');
   await ev('window.__clipSync=null,navigator.clipboard.writeText=function(t){window.__clipSync=!!window.__inTap;window.__clip=t;return Promise.resolve()},true');
-  await tapSync('#send-next'); await until('/Copied\\. Paste it into a text to Zed, then tick it\\./.test(document.getElementById("toast").textContent)', 4000, 'copied');
+  await tapSync('#send-next'); await until('/Copied\\. Paste it into a text to Zed, then tap Mark sent\\./.test(document.getElementById("toast").textContent)', 4000, 'copied');
   ok((await ev('window.__clipSync')) === true, 'GATE: with no share sheet, the copy is asked for synchronously inside the tap too');
   ok((await card('Zed')).parts[0].out === 'copy' && /^Copied /.test((await card('Zed')).parts[0].outText), 'and Zed\u2019s row says it is copied, not sent');
-  { const c = await card('Zed'); ok(c.state === 'part' && c.parts.every(p => !p.done) && /^Mike: tasks for Oak St reno/.test(await ev('window.__clip')) && (await ev('window.__clip')).split('\n')[1].indexOf('https://notebuilt.ca/#crew=') === 0, 'with no share sheet the same text is copied, and the part is not ticked for you', JSON.stringify(c)); }
-  await inCard('Zed', '.tick'); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part') + ').dataset.done==="1"', 4000, 'ticked by hand');
-  ok((await card('Zed')).parts.filter(p => p.done).length === 1 && (await card('Zed')).state === 'part', 'ticking it by hand ticks that part, and only that part');
+  { const c = await card('Zed'); ok(c.state === 'part' && c.parts.every(p => !p.done) && /^Mike: tasks for Oak St reno/.test(await ev('window.__clip')) && (await ev('window.__clip')).split('\n')[1].indexOf('https://notebuilt.ca/#crew=') === 0, 'with no share sheet the same text is copied, and the part is not marked sent for you', JSON.stringify(c)); }
+  await inCard('Zed', '.part' + MARK); await until('document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part') + ').dataset.done==="1"', 4000, 'marked by hand');
+  ok((await card('Zed')).parts.filter(p => p.done).length === 1 && (await card('Zed')).state === 'part', 'marking it by hand marks that part, and only that part');
   // A copy that fails is not a send either.
   await ev('navigator.clipboard.writeText=function(){return Promise.reject(new Error("no"))},true');
   await click('#send-next'); await until('!!document.getElementById("sheet-root").innerHTML', 4000, 'copy sheet');
   { const c = await card('Zed'); ok(c.parts.filter(p => p.done).length === 1 && c.note === 'nocopy' && /couldn\u2019t be copied/.test(c.text) && /Copy this/.test(await sheetText()), 'a failed copy ticks nothing, the row says so, and the text is shown to copy by hand', JSON.stringify(c)); }
   await ev('closeSheet(),true'); await sleep(200);
+  // Make new links is for someone sent with no send kept on this phone, as a restore leaves them.
+  await ev('listEdit(' + q(jobS.id) + ',' + q(today) + ',function(r){delete r.queue[' + q(sw('Joe')) + '];return null},true).then(function(){render();return true})'); await measured();
+  { const c = await card('Joe');
+    ok(c.again && /Make new links$/.test(c.text) && !/Send again/.test(c.text), 'with no links kept, the card says so and its button is Make new links: it does not claim to send', c.text); }
+  ok((await ev('(function(b){return b.length>0&&Array.prototype.every.call(b,function(x){return x.textContent==="Send again"})})(document.querySelectorAll(".send-w .part[data-done=\'1\'] [data-action=send-part]"))&&!Array.prototype.some.call(document.querySelectorAll(".send-w button"),function(b){return b.textContent==="Again"})')),
+    'a marked part\u2019s own resend says Send again, and nothing is labelled a bare Again');
   const b4again = JSON.stringify(await one());
   await inCard('Joe', '[data-action="send-again"]'); await measured(); await sleep(900);
   { const c = await card('Joe'), b4 = b4again;
-    ok(c.parts.length === 1 && !c.parts[0].done && c.state === 'sent' && b4 === JSON.stringify(await one()), 'Send again measures a fresh send for someone already sent, and stores nothing until it is shared'); }
+    ok(c.parts.length === 1 && !c.parts[0].done && c.state === 'sent' && b4 === JSON.stringify(await one()), 'Make new links measures a fresh send for someone already sent, and stores nothing until it is shared'); }
 
-  // Zed has a send started: one of eight parts ticked. Any change to his tasks makes those links stale.
+  // Zed has a send started: one of eight parts marked. Any change to his tasks makes those links stale.
   { const started = async () => { await toSend(); if(!(await one()).queue[sw('Zed')]){ await inCard('Zed', '[data-action="send-part"]'); await until('!!document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part[data-out="share"]') + ')', 5000, 'a part of Zed\u2019s handed over');
-        await inCard('Zed', '.tick'); await until('!!document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part[data-done="1"]') + ')', 5000, 'a part of Zed\u2019s ticked'); }
+        await inCard('Zed', '.part' + MARK); await until('!!document.querySelector(' + q('.send-w[data-wid="' + sw('Zed') + '"] .part[data-done="1"]') + ')', 5000, 'a part of Zed\u2019s marked'); }
       const Q = (await one()).queue[sw('Zed')]; await toDay(); return Q; };
     const dropped = async what => { const M = await one(); ok(!M.queue[sw('Zed')] && (await dayStates()).Zed === 'changed' && M.sent[sw('Zed')].ids.length === 8, what, JSON.stringify(M.queue)); };
     ok(!!(await started()), 'Zed has a send started and not finished');
@@ -1150,7 +1180,7 @@ async function run(){
   await ev('window.__shareFail="AbortError",true'); await click('#send-next'); await sleep(400);
   await load('#/day/' + jbB[1].id + '/2027-01-15'); await listsReady(); await until('!!document.getElementById("task-new")', 4000, 'second day'); await addTask('Maria', 'Demo the kitchen');
   const LB = await dump(), LSB = await snap();
-  ok(LB.length === 2 && Object.keys(LB.find(l => l.day === today).queue).length === 1 && Object.keys(LB.find(l => l.day === today).sent).length === 1, 'the phone holds two lists: one sent to Joe, with a send to Maria started and not finished');
+  ok(LB.length === 2 && (Q => Object.keys(Q).length === 2 && Object.values(Q).filter(x => x.parts.every(p => p.done)).length === 1)(LB.find(l => l.day === today).queue) && Object.keys(LB.find(l => l.day === today).sent).length === 1, 'the phone holds two lists: one sent to Joe, with a send to Maria started and not finished');
   await load('#/support'); await listsReady();
   had = fs.readdirSync(work); await click('[data-action="export"]');
   const FL = await download(had), TL = fs.readFileSync(path.join(work, FL), 'utf8'), BL = JSON.parse(TL); fs.renameSync(path.join(work, FL), path.join(work, 'lists.json'));
